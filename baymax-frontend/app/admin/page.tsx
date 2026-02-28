@@ -2,14 +2,39 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { motion } from "framer-motion";
 import { dataService } from "@/lib/api";
-import ProtectedRoute from "@/components/ProtectedRoute";
+import { adminMockService } from "@/lib/admin-mock";
 import { useToast } from "@/hooks/useToast";
-import { Hospital, ShieldAlert, Package, AlertTriangle, ArrowLeft, Activity, FileText } from "lucide-react";
+import {
+    ShieldAlert,
+    Package,
+    AlertTriangle,
+    Activity,
+    FileText,
+    Pill,
+    IndianRupee,
+    ArrowUpRight,
+    TrendingUp,
+} from "lucide-react";
 import { SkeletonCard } from "@/components/ui/Skeleton";
-import Link from "next/link";
 
-function AdminContent() {
+/* ── animation helpers ── */
+const fadeUp = {
+    hidden: { opacity: 0, y: 18 },
+    show: (i: number) => ({
+        opacity: 1,
+        y: 0,
+        transition: { duration: 0.45, delay: i * 0.08, ease: [0.22, 1, 0.36, 1] },
+    }),
+};
+
+const stagger = {
+    hidden: {},
+    show: { transition: { staggerChildren: 0.07 } },
+};
+
+export default function AdminDashboardPage() {
     const router = useRouter();
     const { toast } = useToast();
     const [loading, setLoading] = useState(true);
@@ -17,21 +42,24 @@ function AdminContent() {
     const [lowStock, setLowStock] = useState<any[]>([]);
     const [vitalTrends, setVitalTrends] = useState<any[]>([]);
     const [cdeLog, setCdeLog] = useState<any[]>([]);
+    const [stats, setStats] = useState<any>(null);
     const [error, setError] = useState("");
 
     useEffect(() => {
         const fetchAdminData = async () => {
             try {
-                const [abuseRes, stockRes, trendsRes, cdeRes] = await Promise.all([
-                    dataService.getAdminAbuse(),
-                    dataService.getLowStock(),
+                const [abuseRes, stockRes, trendsRes, cdeRes, statsRes] = await Promise.all([
+                    dataService.getAdminAbuse().catch(() => []),
+                    dataService.getLowStock().catch(() => []),
                     dataService.getVitalTrends().catch(() => []),
                     dataService.getCDELog().catch(() => []),
+                    adminMockService.getDashboardStats(),
                 ]);
                 setAbuseFlags(Array.isArray(abuseRes) ? abuseRes : []);
                 setLowStock(Array.isArray(stockRes) ? stockRes : []);
                 setVitalTrends(Array.isArray(trendsRes) ? trendsRes : []);
                 setCdeLog(Array.isArray(cdeRes) ? cdeRes : []);
+                setStats(statsRes);
             } catch (err: any) {
                 const msg = err.apiError?.message || "Unable to retrieve admin data.";
                 setError(msg);
@@ -42,200 +70,451 @@ function AdminContent() {
         };
 
         fetchAdminData();
-    }, [router]);
+    }, []);
 
     if (loading) {
         return (
-            <div className="min-h-screen bg-background text-foreground p-8">
-                <div className="max-w-6xl mx-auto space-y-6">
+            <div className="space-y-6">
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                    {[1, 2, 3, 4].map((i) => (
+                        <SkeletonCard key={i} />
+                    ))}
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <SkeletonCard />
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <SkeletonCard />
-                        <SkeletonCard />
-                    </div>
+                    <SkeletonCard />
                 </div>
             </div>
         );
     }
 
+    const statCards = stats
+        ? [
+              { label: "Total Medicines", value: stats.totalMedicines, icon: Pill, color: "emerald" as const, trend: "+12%" },
+              { label: "Low Stock Alerts", value: stats.lowStockCount, icon: Package, color: "amber" as const, trend: "-3" },
+              { label: "Active Prescriptions", value: stats.activePrescriptions, icon: FileText, color: "blue" as const, trend: "+8" },
+              { label: "Revenue", value: `₹${stats.totalRevenue.toLocaleString("en-IN")}`, icon: IndianRupee, color: "emerald" as const, trend: "+18%" },
+          ]
+        : [];
+
+    const colorMap = {
+        emerald: { iconBg: "bg-emerald-100", iconBorder: "border-emerald-200/60", text: "text-emerald-700", glow: "group-hover:shadow-emerald-100/60" },
+        amber: { iconBg: "bg-amber-100", iconBorder: "border-amber-200/60", text: "text-amber-700", glow: "group-hover:shadow-amber-100/60" },
+        blue: { iconBg: "bg-blue-100", iconBorder: "border-blue-200/60", text: "text-blue-700", glow: "group-hover:shadow-blue-100/60" },
+    };
+
     return (
-        <div className="min-h-screen bg-background text-foreground flex flex-col font-sans relative">
-            <div className="bg-noise" />
+        <div className="space-y-8 max-w-[1200px]">
+            {/* ── Page Title ── */}
+            <motion.div
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5 }}
+            >
+                <h1
+                    className="text-3xl tracking-tight text-slate-900"
+                    style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                >
+                    Dashboard
+                </h1>
+                <p
+                    className="text-sm text-slate-500 mt-1.5"
+                    style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}
+                >
+                    Overview of pharmacy operations and patient safety alerts.
+                </p>
+            </motion.div>
 
-            {/* Top Navigation */}
-            <nav className="h-16 border-b border-border/50 bg-black/40 backdrop-blur-xl flex items-center justify-between px-6 z-20 sticky top-0">
-                <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-red-500/20 flex items-center justify-center text-red-500 border border-red-500/50 shadow-[0_0_15px_rgba(239,68,68,0.2)]">
-                        <ShieldAlert size={16} />
-                    </div>
-                    <span className="font-bold tracking-tight text-lg">Baymax<span className="text-muted-foreground font-medium">.OS</span> <span className="uppercase text-xs tracking-widest text-red-400 ml-2 font-mono">Administrative Control</span></span>
-                </div>
+            {error && (
+                <motion.div
+                    initial={{ opacity: 0, scale: 0.97 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="p-4 bg-red-50/80 backdrop-blur border border-red-100 rounded-2xl text-red-600 text-sm flex items-center gap-3"
+                    style={{ fontFamily: "var(--font-poppins)", fontWeight: 600 }}
+                >
+                    <AlertTriangle size={16} /> {error}
+                </motion.div>
+            )}
 
-                <Link href="/dashboard" className="text-sm font-medium text-muted-foreground hover:text-accent flex items-center gap-2 transition-colors">
-                    <ArrowLeft size={16} /> Back to Patient View
-                </Link>
-            </nav>
+            {/* ── Stat Cards ── */}
+            {stats && (
+                <motion.div
+                    variants={stagger}
+                    initial="hidden"
+                    animate="show"
+                    className="grid grid-cols-2 lg:grid-cols-4 gap-4"
+                >
+                    {statCards.map((card, i) => {
+                        const c = colorMap[card.color];
+                        return (
+                            <motion.div
+                                key={i}
+                                variants={fadeUp}
+                                custom={i}
+                                whileHover={{ y: -4, scale: 1.02 }}
+                                className={`group bg-white/70 backdrop-blur-xl border border-slate-200/60 rounded-[22px] p-5 shadow-[0_4px_20px_rgb(0,0,0,0.03)] hover:shadow-xl ${c.glow} transition-all cursor-default`}
+                            >
+                                <div className="flex items-center justify-between mb-3">
+                                    <span
+                                        className="text-[10px] uppercase tracking-[0.18em] text-slate-400"
+                                        style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                                    >
+                                        {card.label}
+                                    </span>
+                                    <div className={`w-9 h-9 rounded-xl ${c.iconBg} border ${c.iconBorder} flex items-center justify-center group-hover:scale-110 transition-transform`}>
+                                        <card.icon size={15} className={c.text} />
+                                    </div>
+                                </div>
+                                <div
+                                    className="text-2xl text-slate-900 mb-1"
+                                    style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                                >
+                                    {card.value}
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                    <TrendingUp size={11} className="text-emerald-500" />
+                                    <span
+                                        className="text-[11px] text-emerald-600"
+                                        style={{ fontFamily: "var(--font-poppins)", fontWeight: 600 }}
+                                    >
+                                        {card.trend}
+                                    </span>
+                                    <span
+                                        className="text-[11px] text-slate-400 ml-0.5"
+                                        style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}
+                                    >
+                                        vs last week
+                                    </span>
+                                </div>
+                            </motion.div>
+                        );
+                    })}
+                </motion.div>
+            )}
 
-            {/* Main Layout */}
-            <main className="flex-1 p-6 lg:p-10 z-10 max-w-[1400px] w-full mx-auto">
-
-                {error && (
-                    <div className="mb-8 p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm font-mon flex items-center gap-3">
-                        <AlertTriangle size={16} /> {error}
-                    </div>
-                )}
-
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-
-                    {/* Account Risk Board */}
-                    <div className="glass-panel border-border/50 rounded-2xl flex flex-col h-[700px] overflow-hidden">
-                        <div className="p-6 border-b border-border/50 bg-black/20 flex items-center justify-between">
+            {/* ── Two-column panels ── */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                {/* Account Abuse Flags */}
+                <motion.div
+                    variants={fadeUp}
+                    custom={0}
+                    initial="hidden"
+                    animate="show"
+                    className="bg-white/70 backdrop-blur-xl border border-slate-200/60 rounded-[28px] shadow-[0_8px_30px_rgb(0,0,0,0.04)] flex flex-col max-h-[600px] overflow-hidden"
+                >
+                    <div className="p-6 border-b border-slate-100/80">
+                        <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-xl bg-amber-100 border border-amber-200/60 flex items-center justify-center">
+                                <ShieldAlert size={15} className="text-amber-600" />
+                            </div>
                             <div>
-                                <h2 className="text-lg font-semibold flex items-center gap-2"><ShieldAlert size={18} className="text-yellow-500" /> Account Abuse Flags</h2>
-                                <p className="text-xs text-muted-foreground mt-1">Users flagged by the CDE for controlled drug seeking behavior or rapid refills.</p>
+                                <h2
+                                    className="text-base text-slate-900"
+                                    style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                                >
+                                    Abuse Flags
+                                </h2>
+                                <p
+                                    className="text-xs text-slate-500 mt-0.5"
+                                    style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}
+                                >
+                                    Controlled drug seeking behavior.
+                                </p>
                             </div>
                         </div>
-
-                        <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-[#0a0a0a]">
-                            {abuseFlags.length === 0 ? (
-                                <div className="h-full flex flex-col items-center justify-center text-muted-foreground space-y-3 opacity-50">
-                                    <ShieldAlert size={32} />
-                                    <span className="text-sm font-medium uppercase tracking-widest font-mono">No abuse flags active</span>
-                                </div>
-                            ) : (
-                                abuseFlags.map((flag, i) => (
-                                    <div key={i} className="bg-black/40 border border-white/5 p-5 rounded-xl flex flex-col gap-3">
-                                        <div className="flex items-start justify-between">
-                                            <div>
-                                                <div className="font-medium text-foreground">{flag.name}</div>
-                                                <div className="text-xs text-muted-foreground font-mono">{flag.phone}</div>
-                                            </div>
-                                            <div className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase tracking-widest border ${flag.blocked ? 'bg-red-500/20 text-red-500 border-red-500/30' : 'bg-yellow-500/20 text-yellow-500 border-yellow-500/30'}`}>
-                                                Score: {flag.score}/10
-                                            </div>
-                                        </div>
-                                        <div className="flex flex-wrap gap-2">
-                                            {flag.flags?.map((f: string, j: number) => (
-                                                <span key={j} className="text-[10px] uppercase font-mono bg-white/5 border border-white/10 px-2 py-1 flex items-center gap-1 rounded text-red-300">
-                                                    <AlertTriangle size={10} /> {f.replace('_', ' ')}
-                                                </span>
-                                            ))}
-                                        </div>
-                                    </div>
-                                ))
-                            )}
-                        </div>
                     </div>
 
-                    {/* Inventory Board */}
-                    <div className="glass-panel border-border/50 rounded-2xl flex flex-col h-[700px] overflow-hidden">
-                        <div className="p-6 border-b border-border/50 bg-black/20 flex items-center justify-between">
-                            <div>
-                                <h2 className="text-lg font-semibold flex items-center gap-2"><Package size={18} className="text-blue-500" /> Pharmacy Inventory Alerts</h2>
-                                <p className="text-xs text-muted-foreground mt-1">Low-stock and expiring medication metrics.</p>
+                    <div className="flex-1 overflow-y-auto p-5 space-y-3">
+                        {abuseFlags.length === 0 ? (
+                            <div className="h-48 flex flex-col items-center justify-center text-slate-400 space-y-3">
+                                <div className="w-14 h-14 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-center"><ShieldAlert size={24} /></div>
+                                <span
+                                    className="text-[10px] uppercase tracking-[0.2em]"
+                                    style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                                >
+                                    No abuse flags
+                                </span>
                             </div>
-
-                            <button onClick={() => router.push('/admin/inventory')} className="shrink-0 h-9 px-4 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20 text-xs font-semibold hover:bg-blue-500/20 transition-colors">
-                                Master Database
-                            </button>
-                        </div>
-
-                        <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-[#0a0a0a]">
-                            {lowStock.length === 0 ? (
-                                <div className="h-full flex flex-col items-center justify-center text-muted-foreground space-y-3 opacity-50">
-                                    <Package size={32} />
-                                    <span className="text-sm font-medium uppercase tracking-widest font-mono">Stock volumes nominal</span>
-                                </div>
-                            ) : (
-                                lowStock.map((item, i) => (
-                                    <div key={i} className="bg-black/40 border border-white/5 p-5 rounded-xl flex items-center justify-between">
+                        ) : (
+                            abuseFlags.map((flag, i) => (
+                                <motion.div
+                                    key={i}
+                                    initial={{ opacity: 0, x: -10 }}
+                                    animate={{ opacity: 1, x: 0 }}
+                                    transition={{ delay: i * 0.06, duration: 0.35 }}
+                                    className="bg-white/60 border border-slate-200/60 p-4 rounded-2xl flex flex-col gap-2 hover:shadow-md hover:shadow-slate-100/60 transition-all"
+                                >
+                                    <div className="flex items-start justify-between">
                                         <div>
-                                            <div className="font-medium text-foreground capitalize text-blue-400">{item.drug_name || item.name}</div>
-                                            <div className="text-xs text-muted-foreground mt-1">Supply depleted below threshold</div>
+                                            <div className="text-sm text-slate-900" style={{ fontFamily: "var(--font-poppins)", fontWeight: 700 }}>{flag.name}</div>
+                                            <div className="text-xs text-slate-500" style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}>{flag.phone}</div>
                                         </div>
-                                        <div className="text-right">
-                                            <div className="text-xl font-bold font-mono text-red-400">{item.stock_left || 0} left</div>
-                                            <button className="text-[10px] text-muted-foreground hover:text-foreground uppercase tracking-wider font-mono mt-1 underline decoration-border underline-offset-4">Dispatch Order</button>
-                                        </div>
-                                    </div>
-                                ))
-                            )}
-                        </div>
-                    </div>
-
-                </div>
-
-                {/* Second Row — Vital Trends + CDE Log */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mt-8">
-
-                    {/* Vital Trend Alerts */}
-                    <div className="glass-panel border-border/50 rounded-2xl flex flex-col h-[500px] overflow-hidden">
-                        <div className="p-6 border-b border-border/50 bg-black/20">
-                            <h2 className="text-lg font-semibold flex items-center gap-2"><Activity size={18} className="text-green-500" /> Vital Trend Alerts</h2>
-                            <p className="text-xs text-muted-foreground mt-1">Patients with sustained abnormal vital patterns.</p>
-                        </div>
-                        <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-[#0a0a0a]">
-                            {vitalTrends.length === 0 ? (
-                                <div className="h-full flex flex-col items-center justify-center text-muted-foreground space-y-3 opacity-50">
-                                    <Activity size={32} />
-                                    <span className="text-sm font-medium uppercase tracking-widest font-mono">No trend alerts</span>
-                                </div>
-                            ) : (
-                                vitalTrends.map((t: any, i: number) => (
-                                    <div key={i} className="bg-black/40 border border-white/5 p-4 rounded-xl flex items-center justify-between">
-                                        <div>
-                                            <div className="font-medium text-foreground capitalize">{t.vital_type || t.vital}</div>
-                                            <div className="text-xs text-muted-foreground mt-1">{t.message || `Trend detected for user ${t.user_id}`}</div>
-                                        </div>
-                                        <span className={`text-[10px] px-2 py-0.5 rounded font-mono uppercase border ${t.alert_sent ? 'text-green-400 bg-green-400/10 border-green-400/20' : 'text-yellow-400 bg-yellow-400/10 border-yellow-400/20'}`}>
-                                            {t.alert_sent ? 'Sent' : 'Pending'}
+                                        <span
+                                            className={`px-2.5 py-0.5 rounded-lg text-[10px] uppercase tracking-[0.15em] border ${
+                                                flag.blocked
+                                                    ? "bg-red-50 text-red-600 border-red-100"
+                                                    : "bg-amber-50 text-amber-600 border-amber-100"
+                                            }`}
+                                            style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                                        >
+                                            Score: {flag.score}/10
                                         </span>
                                     </div>
-                                ))
-                            )}
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {flag.flags?.map((f: string, j: number) => (
+                                            <span
+                                                key={j}
+                                                className="text-[10px] uppercase tracking-[0.15em] bg-red-50 border border-red-100 px-2 py-0.5 rounded-lg text-red-600"
+                                                style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                                            >
+                                                {f.replace("_", " ")}
+                                            </span>
+                                        ))}
+                                    </div>
+                                </motion.div>
+                            ))
+                        )}
+                    </div>
+                </motion.div>
+
+                {/* Inventory Alerts */}
+                <motion.div
+                    variants={fadeUp}
+                    custom={1}
+                    initial="hidden"
+                    animate="show"
+                    className="bg-white/70 backdrop-blur-xl border border-slate-200/60 rounded-[28px] shadow-[0_8px_30px_rgb(0,0,0,0.04)] flex flex-col max-h-[600px] overflow-hidden"
+                >
+                    <div className="p-6 border-b border-slate-100/80 flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-xl bg-emerald-100 border border-emerald-200/60 flex items-center justify-center">
+                                <Package size={15} className="text-emerald-600" />
+                            </div>
+                            <div>
+                                <h2
+                                    className="text-base text-slate-900"
+                                    style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                                >
+                                    Inventory Alerts
+                                </h2>
+                                <p
+                                    className="text-xs text-slate-500 mt-0.5"
+                                    style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}
+                                >
+                                    Low-stock and expiring metrics.
+                                </p>
+                            </div>
                         </div>
+                        <motion.button
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.97 }}
+                            onClick={() => router.push("/admin/inventory")}
+                            className="shrink-0 h-9 px-4 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100 text-xs hover:bg-emerald-100 transition-colors flex items-center gap-1.5"
+                            style={{ fontFamily: "var(--font-poppins)", fontWeight: 700 }}
+                        >
+                            View All <ArrowUpRight size={13} />
+                        </motion.button>
                     </div>
 
-                    {/* CDE Decision Log */}
-                    <div className="glass-panel border-border/50 rounded-2xl flex flex-col h-[500px] overflow-hidden">
-                        <div className="p-6 border-b border-border/50 bg-black/20">
-                            <h2 className="text-lg font-semibold flex items-center gap-2"><FileText size={18} className="text-purple-500" /> Clinical Decision Engine Log</h2>
-                            <p className="text-xs text-muted-foreground mt-1">Recent AI-powered clinical decisions and override history.</p>
-                        </div>
-                        <div className="flex-1 overflow-y-auto p-6 space-y-3 bg-[#0a0a0a]">
-                            {cdeLog.length === 0 ? (
-                                <div className="h-full flex flex-col items-center justify-center text-muted-foreground space-y-3 opacity-50">
-                                    <FileText size={32} />
-                                    <span className="text-sm font-medium uppercase tracking-widest font-mono">No decision records</span>
-                                </div>
-                            ) : (
-                                cdeLog.map((entry: any, i: number) => (
-                                    <div key={i} className="bg-black/40 border border-white/5 p-4 rounded-xl">
-                                        <div className="flex items-start justify-between mb-2">
-                                            <div className="font-medium text-sm text-foreground">{entry.decision_type || entry.action || 'Decision'}</div>
-                                            <time className="text-[10px] font-mono text-muted-foreground">{new Date(entry.created_at).toLocaleString()}</time>
+                    <div className="flex-1 overflow-y-auto p-5 space-y-3">
+                        {lowStock.length === 0 ? (
+                            <div className="h-48 flex flex-col items-center justify-center text-slate-400 space-y-3">
+                                <div className="w-14 h-14 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-center"><Package size={24} /></div>
+                                <span
+                                    className="text-[10px] uppercase tracking-[0.2em]"
+                                    style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                                >
+                                    Stock nominal
+                                </span>
+                            </div>
+                        ) : (
+                            lowStock.map((item, i) => (
+                                <motion.div
+                                    key={i}
+                                    initial={{ opacity: 0, x: -10 }}
+                                    animate={{ opacity: 1, x: 0 }}
+                                    transition={{ delay: i * 0.06, duration: 0.35 }}
+                                    className="bg-white/60 border border-slate-200/60 p-4 rounded-2xl flex items-center justify-between hover:shadow-md hover:shadow-slate-100/60 transition-all"
+                                >
+                                    <div>
+                                        <div
+                                            className="text-sm text-slate-900 capitalize"
+                                            style={{ fontFamily: "var(--font-poppins)", fontWeight: 700 }}
+                                        >
+                                            {item.drug_name || item.name}
                                         </div>
-                                        <div className="text-xs text-muted-foreground leading-relaxed">
-                                            {entry.reasoning || entry.details || JSON.stringify(entry).slice(0, 200)}
+                                        <div
+                                            className="text-xs text-slate-500 mt-0.5"
+                                            style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}
+                                        >
+                                            Below threshold
                                         </div>
                                     </div>
-                                ))
-                            )}
+                                    <div className="text-right">
+                                        <div
+                                            className="text-lg text-red-500"
+                                            style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                                        >
+                                            {item.stock_left || 0}
+                                        </div>
+                                        <div
+                                            className="text-[10px] text-slate-400 uppercase tracking-[0.15em]"
+                                            style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                                        >
+                                            units left
+                                        </div>
+                                    </div>
+                                </motion.div>
+                            ))
+                        )}
+                    </div>
+                </motion.div>
+            </div>
+
+            {/* ── Second Row — Vital Trends + CDE Log ── */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                {/* Vital Trends */}
+                <motion.div
+                    variants={fadeUp}
+                    custom={2}
+                    initial="hidden"
+                    animate="show"
+                    className="bg-white/70 backdrop-blur-xl border border-slate-200/60 rounded-[28px] shadow-[0_8px_30px_rgb(0,0,0,0.04)] flex flex-col max-h-[450px] overflow-hidden"
+                >
+                    <div className="p-6 border-b border-slate-100/80">
+                        <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-xl bg-emerald-100 border border-emerald-200/60 flex items-center justify-center">
+                                <Activity size={15} className="text-emerald-600" />
+                            </div>
+                            <div>
+                                <h2
+                                    className="text-base text-slate-900"
+                                    style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                                >
+                                    Vital Trend Alerts
+                                </h2>
+                                <p
+                                    className="text-xs text-slate-500 mt-0.5"
+                                    style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}
+                                >
+                                    Sustained abnormal vital patterns.
+                                </p>
+                            </div>
                         </div>
                     </div>
+                    <div className="flex-1 overflow-y-auto p-5 space-y-3">
+                        {vitalTrends.length === 0 ? (
+                            <div className="h-36 flex flex-col items-center justify-center text-slate-400 space-y-3">
+                                <div className="w-14 h-14 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-center"><Activity size={24} /></div>
+                                <span
+                                    className="text-[10px] uppercase tracking-[0.2em]"
+                                    style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                                >
+                                    No trend alerts
+                                </span>
+                            </div>
+                        ) : (
+                            vitalTrends.map((t: any, i: number) => (
+                                <motion.div
+                                    key={i}
+                                    initial={{ opacity: 0, x: -10 }}
+                                    animate={{ opacity: 1, x: 0 }}
+                                    transition={{ delay: i * 0.06, duration: 0.35 }}
+                                    className="bg-white/60 border border-slate-200/60 p-4 rounded-2xl flex items-center justify-between hover:shadow-md hover:shadow-slate-100/60 transition-all"
+                                >
+                                    <div>
+                                        <div className="text-sm text-slate-900 capitalize" style={{ fontFamily: "var(--font-poppins)", fontWeight: 700 }}>
+                                            {t.vital_type || t.vital}
+                                        </div>
+                                        <div className="text-xs text-slate-500 mt-0.5" style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}>
+                                            {t.message || `Trend for user ${t.user_id}`}
+                                        </div>
+                                    </div>
+                                    <span
+                                        className={`text-[10px] px-2.5 py-0.5 rounded-lg uppercase tracking-[0.15em] border ${
+                                            t.alert_sent
+                                                ? "text-emerald-600 bg-emerald-50 border-emerald-100"
+                                                : "text-amber-600 bg-amber-50 border-amber-100"
+                                        }`}
+                                        style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                                    >
+                                        {t.alert_sent ? "Sent" : "Pending"}
+                                    </span>
+                                </motion.div>
+                            ))
+                        )}
+                    </div>
+                </motion.div>
 
-                </div>
-
-            </main>
-
+                {/* CDE Decision Log */}
+                <motion.div
+                    variants={fadeUp}
+                    custom={3}
+                    initial="hidden"
+                    animate="show"
+                    className="bg-white/70 backdrop-blur-xl border border-slate-200/60 rounded-[28px] shadow-[0_8px_30px_rgb(0,0,0,0.04)] flex flex-col max-h-[450px] overflow-hidden"
+                >
+                    <div className="p-6 border-b border-slate-100/80">
+                        <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-xl bg-emerald-100 border border-emerald-200/60 flex items-center justify-center">
+                                <FileText size={15} className="text-emerald-600" />
+                            </div>
+                            <div>
+                                <h2
+                                    className="text-base text-slate-900"
+                                    style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                                >
+                                    CDE Decision Log
+                                </h2>
+                                <p
+                                    className="text-xs text-slate-500 mt-0.5"
+                                    style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}
+                                >
+                                    Recent AI-powered clinical decisions.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-5 space-y-3">
+                        {cdeLog.length === 0 ? (
+                            <div className="h-36 flex flex-col items-center justify-center text-slate-400 space-y-3">
+                                <div className="w-14 h-14 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-center"><FileText size={24} /></div>
+                                <span
+                                    className="text-[10px] uppercase tracking-[0.2em]"
+                                    style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                                >
+                                    No records
+                                </span>
+                            </div>
+                        ) : (
+                            cdeLog.map((entry: any, i: number) => (
+                                <motion.div
+                                    key={i}
+                                    initial={{ opacity: 0, x: -10 }}
+                                    animate={{ opacity: 1, x: 0 }}
+                                    transition={{ delay: i * 0.06, duration: 0.35 }}
+                                    className="bg-white/60 border border-slate-200/60 p-4 rounded-2xl hover:shadow-md hover:shadow-slate-100/60 transition-all"
+                                >
+                                    <div className="flex items-start justify-between mb-1.5">
+                                        <div className="text-sm text-slate-900" style={{ fontFamily: "var(--font-poppins)", fontWeight: 700 }}>
+                                            {entry.decision_type || entry.action || "Decision"}
+                                        </div>
+                                        <time
+                                            className="text-[10px] text-slate-400 uppercase tracking-[0.15em]"
+                                            style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                                        >
+                                            {new Date(entry.created_at).toLocaleString()}
+                                        </time>
+                                    </div>
+                                    <div className="text-xs text-slate-500 leading-relaxed" style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}>
+                                        {entry.reasoning || entry.details || JSON.stringify(entry).slice(0, 200)}
+                                    </div>
+                                </motion.div>
+                            ))
+                        )}
+                    </div>
+                </motion.div>
+            </div>
         </div>
-    );
-}
-
-export default function AdminDashboardPage() {
-    return (
-        <ProtectedRoute>
-            <AdminContent />
-        </ProtectedRoute>
     );
 }

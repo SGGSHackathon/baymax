@@ -2,6 +2,8 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
+import Link from "next/link";
 import { useAuth } from "@/hooks/useAuth";
 import { dataService } from "@/lib/api";
 import { useToast } from "@/hooks/useToast";
@@ -9,10 +11,9 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-    Send, Mic, Square, Loader2, ArrowLeft,
-    Globe, Stethoscope, AlertTriangle, User as UserIcon,
-    Volume2, VolumeX, ExternalLink,
-    MessageSquare, Phone, PhoneOff, MicOff
+    Send, Mic, Square, Loader2, ArrowLeft, Search,
+    Globe, Stethoscope, CheckCircle2,
+    AlertTriangle, User as UserIcon, ArrowUp
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -220,6 +221,10 @@ export default function ChatPage() {
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const bottomRef = useRef<HTMLDivElement>(null);
 
+    const messagesEndRef = useRef<HTMLDivElement>(null);
+    const inputRef = useRef<HTMLTextAreaElement>(null);
+
+    const hasMessages = messages.length > 0 || isThinking;
 
     // Load history on mount
     useEffect(() => {
@@ -823,7 +828,7 @@ export default function ChatPage() {
                     </p>
                 </div>
             </div>
-        </div>
+        </motion.div>
     );
 }
 

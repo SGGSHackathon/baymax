@@ -403,20 +403,20 @@ function UploadContent() {
     return (
         <div className="min-h-screen bg-[#fafbfc] text-slate-900 font-sans relative flex flex-col p-4 md:p-8">
             <div className="fixed inset-0 overflow-hidden pointer-events-none z-0">
-                <div className="absolute top-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-50 rounded-full blur-[120px] opacity-60" />
-                <div className="absolute bottom-[-10%] left-[-10%] w-[30%] h-[30%] bg-indigo-50 rounded-full blur-[100px] opacity-40" />
+                <div className="absolute top-[-10%] right-[-10%] w-[40%] h-[40%] bg-emerald-50 rounded-full blur-[120px] opacity-60" />
+                <div className="absolute bottom-[-10%] left-[-10%] w-[30%] h-[30%] bg-teal-50 rounded-full blur-[100px] opacity-40" />
             </div>
 
             <div className="max-w-4xl mx-auto w-full relative z-10 flex flex-col">
                 <div className="mb-8 flex items-center justify-between">
-                    <Link href="/dashboard" className="flex items-center gap-2 text-slate-500 hover:text-blue-600 transition-colors text-sm font-bold">
+                    <Link href="/dashboard" className="flex items-center gap-2 text-slate-500 hover:text-emerald-600 transition-colors text-sm font-bold">
                         <ArrowLeft size={16} /> Back to Dashboard
                     </Link>
                 </div>
 
                 <div className="bg-white p-8 md:p-12 rounded-4xl border border-slate-200 shadow-[0_8px_30px_rgb(0,0,0,0.04)] mb-8">
                     <div className="flex items-center gap-4 mb-2">
-                        <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center">
+                        <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
                             <UploadCloud size={24} />
                         </div>
                         <div>
@@ -432,7 +432,7 @@ function UploadContent() {
                                 className="flex flex-col items-center"
                             >
                                 <div
-                                    className={`w-full border-2 border-dashed rounded-3xl p-12 flex flex-col items-center justify-center transition-all cursor-pointer ${dragActive ? "border-blue-500 bg-blue-50" : "border-slate-200 hover:border-blue-400 hover:bg-slate-50"
+                                    className={`w-full border-2 border-dashed rounded-3xl p-12 flex flex-col items-center justify-center transition-all cursor-pointer ${dragActive ? "border-emerald-500 bg-emerald-50" : "border-slate-200 hover:border-emerald-400 hover:bg-slate-50"
                                         }`}
                                     onDragEnter={() => setDragActive(true)}
                                     onDragLeave={() => setDragActive(false)}
@@ -446,7 +446,7 @@ function UploadContent() {
                                         onChange={handleChange}
                                     />
 
-                                    <div className="w-16 h-16 rounded-full bg-white shadow-sm border border-slate-100 flex items-center justify-center text-blue-500 mb-6 group-hover:scale-110 transition-transform">
+                                    <div className="w-16 h-16 rounded-full bg-white shadow-sm border border-slate-100 flex items-center justify-center text-emerald-600 mb-6 group-hover:scale-110 transition-transform">
                                         <FileText size={28} />
                                     </div>
                                     <h3 className="text-xl font-bold text-slate-800 mb-2">Drag & Drop your file here</h3>
@@ -454,7 +454,7 @@ function UploadContent() {
                                         Supports PDF, PNG, JPG, JPEG, or ZIP up to 10MB
                                     </p>
 
-                                    <button className="px-6 py-2.5 bg-blue-600 text-white rounded-xl font-bold text-sm hover:bg-blue-700 transition-colors shadow-sm">
+                                    <button className="px-6 py-2.5 bg-slate-900 text-white rounded-xl font-bold text-sm hover:bg-emerald-800 transition-colors shadow-sm">
                                         Browse Files
                                     </button>
                                 </div>
@@ -469,7 +469,7 @@ function UploadContent() {
                                 {file && (
                                     <div className="w-full mt-6 p-4 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between">
                                         <div className="flex items-center gap-4">
-                                            <div className="w-10 h-10 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
+                                            <div className="w-10 h-10 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
                                                 <FileText size={20} />
                                             </div>
                                             <div className="overflow-hidden">
@@ -484,7 +484,7 @@ function UploadContent() {
                                             </button>
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); processUpload(); }}
-                                                className="px-4 py-2 bg-blue-600 text-white text-xs font-bold rounded-lg hover:bg-blue-700 transition-colors shadow-sm"
+                                                className="px-4 py-2 bg-slate-900 text-white text-xs font-bold rounded-lg hover:bg-emerald-800 transition-colors shadow-sm"
                                             >
                                                 Upload & Extract
                                             </button>
@@ -501,7 +501,7 @@ function UploadContent() {
                                     <svg className="w-full h-full -rotate-90" viewBox="0 0 100 100">
                                         <circle cx="50" cy="50" r="45" fill="none" stroke="#f1f5f9" strokeWidth="8" />
                                         <motion.circle
-                                            cx="50" cy="50" r="45" fill="none" stroke="#2563eb" strokeWidth="8"
+                                            cx="50" cy="50" r="45" fill="none" stroke="#059669" strokeWidth="8"
                                             strokeLinecap="round"
                                             initial={{ strokeDasharray: "0 283" }}
                                             animate={{ strokeDasharray: `${(progress / 100) * 283} 283` }}
@@ -510,9 +510,9 @@ function UploadContent() {
                                     </svg>
                                     <div className="absolute inset-0 flex items-center justify-center flex-col">
                                         {status === "uploading" ? (
-                                            <UploadCloud size={24} className="text-blue-500 animate-bounce" />
+                                            <UploadCloud size={24} className="text-emerald-600 animate-bounce" />
                                         ) : (
-                                            <Loader2 size={24} className="text-blue-500 animate-spin" />
+                                            <Loader2 size={24} className="text-emerald-600 animate-spin" />
                                         )}
                                     </div>
                                 </div>
@@ -594,23 +594,7 @@ function UploadContent() {
                             {/* Drugs Table */}
                             <div className="bg-white p-8 rounded-4xl border border-slate-200 shadow-sm">
                                 <h3 className="text-xl font-bold text-slate-900 flex items-center gap-3 mb-6">
-                                    <Pill className="text-blue-600" size={24} /> Prescribed Medications
-                                    {(extractedData.drugs?.length > 0 || ocrMedicines.length > 0) && (() => {
-                                        const allOcr = extractedData.drugs?.length > 0 &&
-                                            extractedData.drugs.every((d: any) => d.pinecone_metadata?.ocr_fallback);
-                                        const count = extractedData.drugs?.length > 0 ? extractedData.drugs.length : ocrMedicines.length;
-                                        return (
-                                            <span className={`ml-auto text-xs font-bold px-3 py-1 rounded-full ${
-                                                allOcr ? 'text-amber-600 bg-amber-50' :
-                                                extractedData.drugs?.length > 0 ? 'text-slate-400 bg-slate-100' :
-                                                'text-amber-600 bg-amber-50'
-                                            }`}>
-                                                {allOcr ? `${count} via OCR` :
-                                                 extractedData.drugs?.length > 0 ? `${count} found` :
-                                                 `${count} via OCR`}
-                                            </span>
-                                        );
-                                    })()}
+                                    <Pill className="text-emerald-600" size={24} /> Prescribed Medications
                                 </h3>
 
                                 {extractedData.drugs && extractedData.drugs.length > 0 ? (
@@ -656,7 +640,7 @@ function UploadContent() {
                                                         </td>
                                                         <td className="py-4 text-slate-600 font-medium">{drug.dosage || "-"}</td>
                                                         <td className="py-4 text-slate-600">
-                                                            <span className="px-2 py-1 bg-blue-50 text-blue-700 rounded-lg text-xs font-bold">
+                                                            <span className="px-2 py-1 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-bold">
                                                                 {drug.frequency_raw || drug.frequency || "-"}
                                                             </span>
                                                         </td>
@@ -754,7 +738,7 @@ function UploadContent() {
                             {/* Observations List */}
                             <div className="bg-white p-8 rounded-4xl border border-slate-200 shadow-sm">
                                 <h3 className="text-xl font-bold text-slate-900 flex items-center gap-3 mb-6">
-                                    <Activity className="text-indigo-600" size={24} /> Clinical Observations
+                                    <Activity className="text-emerald-600" size={24} /> Clinical Observations
                                 </h3>
 
                                 {extractedData.observations && extractedData.observations.length > 0 ? (
@@ -762,7 +746,7 @@ function UploadContent() {
                                         {extractedData.observations.map((obs: any, i: number) => (
                                             <div key={i} className="p-4 rounded-2xl border border-slate-100 bg-slate-50 flex flex-col gap-2">
                                                 <div className="flex items-center justify-between">
-                                                    <span className="text-[10px] font-bold uppercase tracking-widest text-indigo-500">
+                                                    <span className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">
                                                         {obs.observation_type.replace('_', ' ')}
                                                     </span>
                                                     {obs.severity && (

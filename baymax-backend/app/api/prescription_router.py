@@ -5,11 +5,13 @@ import uuid
 import zipfile
 import logging
 import tempfile
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional
 
 import boto3
 import psycopg2
+from dotenv import load_dotenv
 from psycopg2.extras import RealDictCursor, execute_values
 from pinecone import Pinecone
 from sarvamai import SarvamAI
@@ -21,6 +23,8 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+
 DATABASE_URL = os.environ["DATABASE_URL"]
 SARVAM_API_KEY = os.environ["SARVAM_API_KEY"]
 PINECONE_API_KEY = os.environ["PINECONE_API_KEY"]

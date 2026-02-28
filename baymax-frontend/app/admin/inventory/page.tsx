@@ -1,185 +1,585 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, useCallback } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { dataService } from "@/lib/api";
-import { Loader2, Package, Search, AlertTriangle, CheckCircle, ArrowLeft, Clock } from "lucide-react";
-import Link from "next/link";
+import { adminMockService, InventoryItem } from "@/lib/admin-mock";
+import { useToast } from "@/hooks/useToast";
+import {
+    Loader2,
+    Package,
+    Search,
+    AlertTriangle,
+    CheckCircle,
+    Clock,
+    Plus,
+    Pencil,
+    X,
+    Filter,
+    ArrowUpRight,
+} from "lucide-react";
+
+const STATUS_FILTERS = ["All", "in_stock", "low_stock", "out_of_stock"] as const;
+
+/* ── animation helpers ── */
+const fadeUp = {
+    hidden: { opacity: 0, y: 16 },
+    show: (i: number) => ({
+        opacity: 1,
+        y: 0,
+        transition: { duration: 0.4, delay: i * 0.04, ease: [0.22, 1, 0.36, 1] },
+    }),
+};
 
 export default function InventoryDashboardPage() {
-    const router = useRouter();
-    const [query, setQuery] = useState("");
-    const [results, setResults] = useState<any[]>([]);
-    const [loading, setLoading] = useState(false);
+    const { toast } = useToast();
+    const [inventory, setInventory] = useState<InventoryItem[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [search, setSearch] = useState("");
+    const [statusFilter, setStatusFilter] = useState<string>("All");
+
+    const [apiQuery, setApiQuery] = useState("");
+    const [apiResults, setApiResults] = useState<any[]>([]);
+    const [apiLoading, setApiLoading] = useState(false);
     const [recallActive, setRecallActive] = useState<{ [key: string]: any }>({});
     const [recallLoading, setRecallLoading] = useState<{ [key: string]: boolean }>({});
+
     const [expiring, setExpiring] = useState<any[]>([]);
     const [expiringLoading, setExpiringLoading] = useState(true);
 
-    useEffect(() => {
-        dataService.getExpiringMeds()
-            .then(res => setExpiring(Array.isArray(res) ? res : []))
-            .catch(() => setExpiring([]))
-            .finally(() => setExpiringLoading(false));
-    }, []);
+    const [editItem, setEditItem] = useState<InventoryItem | null>(null);
+    const [editStock, setEditStock] = useState(0);
+    const [saving, setSaving] = useState(false);
 
-    const handleSearch = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (query.trim().length < 2) return;
-
-        setLoading(true);
+    const fetchInventory = useCallback(async () => {
         try {
-            const res = await dataService.searchInventory(query);
-            setResults(Array.isArray(res) ? res : []);
-        } catch (err) {
-            console.warn("Search failed");
+            const data = await adminMockService.getInventory();
+            setInventory(data);
+        } catch {
+            toast("Failed to load inventory", "error");
         } finally {
             setLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        fetchInventory();
+        dataService
+            .getExpiringMeds()
+            .then((res) => setExpiring(Array.isArray(res) ? res : []))
+            .catch(() => setExpiring([]))
+            .finally(() => setExpiringLoading(false));
+    }, [fetchInventory]);
+
+    const handleApiSearch = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (apiQuery.trim().length < 2) return;
+        setApiLoading(true);
+        try {
+            const res = await dataService.searchInventory(apiQuery);
+            setApiResults(Array.isArray(res) ? res : []);
+        } catch {
+            toast("Search failed", "error");
+        } finally {
+            setApiLoading(false);
         }
     };
 
     const checkRecall = async (drugName: string) => {
-        setRecallLoading(prev => ({ ...prev, [drugName]: true }));
+        setRecallLoading((prev) => ({ ...prev, [drugName]: true }));
         try {
             const res = await dataService.checkRecall(drugName);
-            setRecallActive(prev => ({ ...prev, [drugName]: res }));
-        } catch (err) {
-            console.warn("Recall check failed");
+            setRecallActive((prev) => ({ ...prev, [drugName]: res }));
+        } catch {
+            toast("Recall check failed", "error");
         } finally {
-            setRecallLoading(prev => ({ ...prev, [drugName]: false }));
+            setRecallLoading((prev) => ({ ...prev, [drugName]: false }));
         }
     };
 
+    const openEdit = (item: InventoryItem) => {
+        setEditItem(item);
+        setEditStock(item.stock_left);
+    };
+
+    const handleSaveStock = async () => {
+        if (!editItem) return;
+        setSaving(true);
+        try {
+            const newStatus: InventoryItem["status"] =
+                editStock === 0 ? "out_of_stock" : editStock <= editItem.reorder_level ? "low_stock" : "in_stock";
+            await adminMockService.updateInventory(editItem.id, { stock_left: editStock, status: newStatus });
+            toast("Stock updated", "success");
+            await fetchInventory();
+            setEditItem(null);
+        } catch {
+            toast("Failed to update stock", "error");
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const filtered = inventory.filter((i) => {
+        const matchSearch = i.drug_name.toLowerCase().includes(search.toLowerCase()) || i.brand.toLowerCase().includes(search.toLowerCase());
+        const matchStatus = statusFilter === "All" || i.status === statusFilter;
+        return matchSearch && matchStatus;
+    });
+
+    const statusLabel = (s: string) => s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    const statusStyle = (s: string) => {
+        switch (s) {
+            case "in_stock":
+                return "bg-emerald-50 text-emerald-600 border-emerald-100";
+            case "low_stock":
+                return "bg-amber-50 text-amber-600 border-amber-100";
+            case "out_of_stock":
+                return "bg-red-50 text-red-500 border-red-100";
+            default:
+                return "bg-slate-50 text-slate-500 border-slate-200";
+        }
+    };
+
+    if (loading) {
+        return (
+            <div className="flex items-center justify-center h-64">
+                <Loader2 className="animate-spin text-emerald-600" size={28} />
+            </div>
+        );
+    }
+
     return (
-        <div className="min-h-screen bg-background text-foreground flex flex-col font-sans relative">
-            <div className="bg-noise" />
+        <div className="space-y-8 max-w-[1200px]">
+            {/* ── Header ── */}
+            <motion.div
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5 }}
+            >
+                <h1
+                    className="text-3xl tracking-tight text-slate-900"
+                    style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                >
+                    Inventory
+                </h1>
+                <p
+                    className="text-sm text-slate-500 mt-1.5"
+                    style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}
+                >
+                    Track stock levels, expiration dates, and FDA recall status.
+                </p>
+            </motion.div>
 
-            {/* Top Navigation */}
-            <nav className="h-16 border-b border-border/50 bg-black/40 backdrop-blur-xl flex items-center justify-between px-6 z-20 sticky top-0">
-                <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-blue-500/20 flex items-center justify-center text-blue-500 border border-blue-500/50 shadow-[0_0_15px_rgba(59,130,246,0.2)]">
-                        <Package size={16} />
-                    </div>
-                    <span className="font-bold tracking-tight text-lg">Baymax<span className="text-muted-foreground font-medium">.OS</span> <span className="uppercase text-xs tracking-widest text-blue-400 ml-2 font-mono">Inventory Control</span></span>
-                </div>
-
-                <Link href="/admin" className="text-sm font-medium text-muted-foreground hover:text-accent flex items-center gap-2 transition-colors">
-                    <ArrowLeft size={16} /> Back to Admin
-                </Link>
-            </nav>
-
-            <main className="flex-1 p-6 lg:p-10 z-10 max-w-[1000px] w-full mx-auto flex flex-col gap-8">
-
-                <div className="glass-panel p-8 rounded-3xl border border-border/50 relative overflow-hidden">
-                    <div className="absolute top-0 right-0 w-64 h-64 bg-blue-500/5 blur-[100px] rounded-full pointer-events-none" />
-
-                    <h1 className="text-2xl font-bold tracking-tight mb-2">Pharmacological Database</h1>
-                    <p className="text-muted-foreground text-sm mb-8">Search the master inventory list and perform real-time FDA recall verification.</p>
-
-                    <form onSubmit={handleSearch} className="relative flex items-center max-w-xl">
-                        <Search size={18} className="absolute left-4 text-muted-foreground" />
+            {/* ── Inventory Table Section ── */}
+            <div className="space-y-4">
+                {/* Filters */}
+                <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.4, delay: 0.1 }}
+                    className="flex flex-col sm:flex-row gap-3"
+                >
+                    <div className="relative flex-1 max-w-md">
+                        <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
                         <input
                             type="text"
-                            value={query}
-                            onChange={(e) => setQuery(e.target.value)}
-                            placeholder="Search medicines (e.g. Paracetamol)..."
-                            className="w-full h-14 bg-black/40 border border-border/50 rounded-xl pl-12 pr-24 text-sm focus:outline-none focus:border-blue-500/50 transition-all font-medium placeholder:text-muted-foreground/50"
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                            placeholder="Search inventory..."
+                            className="w-full h-11 bg-white/70 backdrop-blur-xl border border-slate-200/60 rounded-xl pl-10 pr-4 text-sm focus:outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition-all text-slate-900 placeholder:text-slate-300"
+                            style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}
                         />
-                        <button
-                            type="submit"
-                            disabled={loading || query.length < 2}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 h-10 px-4 flex items-center justify-center bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 transition-colors text-xs font-semibold tracking-wide"
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <Filter size={14} className="text-slate-400 shrink-0" />
+                        {STATUS_FILTERS.map((s) => (
+                            <motion.button
+                                key={s}
+                                whileHover={{ scale: 1.05 }}
+                                whileTap={{ scale: 0.95 }}
+                                onClick={() => setStatusFilter(s)}
+                                className={`px-3.5 py-1.5 rounded-xl text-xs whitespace-nowrap border transition-all ${
+                                    statusFilter === s
+                                        ? "bg-emerald-50 text-emerald-700 border-emerald-100 shadow-sm shadow-emerald-100/50"
+                                        : "bg-white/60 text-slate-500 border-slate-200/60 hover:text-slate-900 hover:border-slate-300"
+                                }`}
+                                style={{ fontFamily: "var(--font-poppins)", fontWeight: statusFilter === s ? 700 : 600 }}
+                            >
+                                {s === "All" ? "All" : statusLabel(s)}
+                            </motion.button>
+                        ))}
+                    </div>
+                </motion.div>
+
+                {/* Table */}
+                <motion.div
+                    initial={{ opacity: 0, y: 14 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.5, delay: 0.15 }}
+                    className="bg-white/70 backdrop-blur-xl border border-slate-200/60 rounded-[28px] shadow-[0_8px_30px_rgb(0,0,0,0.04)] overflow-hidden"
+                >
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="border-b border-slate-100/80">
+                                    {["Drug Name", "Brand", "Category", "Stock", "Batch", "Expiry", "Status", "Actions"].map((h, i) => (
+                                        <th
+                                            key={h}
+                                            className={`${i === 7 ? "text-right" : "text-left"} px-5 py-4 text-[10px] uppercase tracking-[0.18em] text-slate-400`}
+                                            style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                                        >
+                                            {h}
+                                        </th>
+                                    ))}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {filtered.length === 0 ? (
+                                    <tr>
+                                        <td colSpan={8} className="text-center py-16 text-slate-400">
+                                            <div className="flex flex-col items-center gap-3">
+                                                <div className="w-14 h-14 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-center">
+                                                    <Package size={24} />
+                                                </div>
+                                                <span
+                                                    className="text-[10px] uppercase tracking-[0.2em]"
+                                                    style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                                                >
+                                                    No items found
+                                                </span>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ) : (
+                                    filtered.map((item, i) => (
+                                        <motion.tr
+                                            key={item.id}
+                                            variants={fadeUp}
+                                            custom={i}
+                                            initial="hidden"
+                                            animate="show"
+                                            className="border-b border-slate-50 last:border-b-0 hover:bg-emerald-50/30 transition-colors"
+                                        >
+                                            <td className="px-5 py-4 text-slate-900" style={{ fontFamily: "var(--font-poppins)", fontWeight: 700 }}>{item.drug_name}</td>
+                                            <td className="px-5 py-4 text-slate-600" style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}>{item.brand}</td>
+                                            <td className="px-5 py-4">
+                                                <span
+                                                    className="px-2.5 py-0.5 bg-slate-50 border border-slate-100 rounded-lg text-xs text-slate-600"
+                                                    style={{ fontFamily: "var(--font-poppins)", fontWeight: 600 }}
+                                                >
+                                                    {item.category}
+                                                </span>
+                                            </td>
+                                            <td className="px-5 py-4 text-slate-900" style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}>{item.stock_left}</td>
+                                            <td className="px-5 py-4 text-slate-500 text-xs" style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}>{item.batch_no}</td>
+                                            <td className="px-5 py-4 text-slate-500 text-xs" style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}>{new Date(item.expiry_date).toLocaleDateString()}</td>
+                                            <td className="px-5 py-4">
+                                                <span
+                                                    className={`px-2.5 py-0.5 rounded-lg text-[10px] uppercase tracking-[0.15em] border ${statusStyle(item.status)}`}
+                                                    style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                                                >
+                                                    {statusLabel(item.status)}
+                                                </span>
+                                            </td>
+                                            <td className="px-5 py-4">
+                                                <div className="flex items-center justify-end">
+                                                    <motion.button
+                                                        whileHover={{ scale: 1.12 }}
+                                                        whileTap={{ scale: 0.92 }}
+                                                        onClick={() => openEdit(item)}
+                                                        className="w-9 h-9 rounded-xl bg-white/80 border border-slate-200/60 flex items-center justify-center text-slate-500 hover:text-emerald-600 hover:border-emerald-200 hover:bg-emerald-50/50 transition-all shadow-sm"
+                                                        title="Edit Stock"
+                                                    >
+                                                        <Pencil size={14} />
+                                                    </motion.button>
+                                                </div>
+                                            </td>
+                                        </motion.tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div className="px-5 py-3.5 border-t border-slate-100/80 flex items-center justify-between">
+                        <span
+                            className="text-xs text-slate-400"
+                            style={{ fontFamily: "var(--font-poppins)", fontWeight: 600 }}
                         >
-                            {loading ? <Loader2 className="animate-spin" size={14} /> : "Search DB"}
-                        </button>
-                    </form>
+                            {filtered.length} of {inventory.length} items
+                        </span>
+                    </div>
+                </motion.div>
+            </div>
+
+            {/* ── FDA Recall Check ── */}
+            <motion.div
+                initial={{ opacity: 0, y: 14 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5, delay: 0.2 }}
+                className="bg-white/70 backdrop-blur-xl p-6 rounded-[28px] border border-slate-200/60 shadow-[0_8px_30px_rgb(0,0,0,0.04)] relative overflow-hidden"
+            >
+                <div className="absolute top-0 right-0 w-48 h-48 bg-emerald-100/30 blur-[100px] rounded-full pointer-events-none" />
+
+                <div className="flex items-center gap-3 mb-1">
+                    <div className="w-9 h-9 rounded-xl bg-emerald-100 border border-emerald-200/60 flex items-center justify-center">
+                        <AlertTriangle size={15} className="text-emerald-600" />
+                    </div>
+                    <div>
+                        <h2
+                            className="text-base text-slate-900"
+                            style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                        >
+                            FDA Recall Check
+                        </h2>
+                        <p
+                            className="text-xs text-slate-500 mt-0.5"
+                            style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}
+                        >
+                            Search master database and verify real-time recall status.
+                        </p>
+                    </div>
                 </div>
 
-                {results.length > 0 && (
-                    <div className="space-y-4">
-                        <h3 className="text-[10px] uppercase font-mono tracking-widest text-muted-foreground ml-2">Search Results ({results.length})</h3>
-                        <div className="grid grid-cols-1 gap-4">
-                            {results.map((item, i) => {
-                                const drugName = item.drug_name || item.name;
-                                const recallData = recallActive[drugName];
-                                const isValidating = recallLoading[drugName];
+                <form onSubmit={handleApiSearch} className="relative flex items-center max-w-xl mt-4">
+                    <Search size={16} className="absolute left-4 text-slate-400" />
+                    <input
+                        type="text"
+                        value={apiQuery}
+                        onChange={(e) => setApiQuery(e.target.value)}
+                        placeholder="Search medicines (e.g. Paracetamol)..."
+                        className="w-full h-12 bg-white/70 border border-slate-200/60 rounded-xl pl-11 pr-24 text-sm focus:outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition-all text-slate-900 placeholder:text-slate-300"
+                        style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}
+                    />
+                    <motion.button
+                        whileHover={{ scale: 1.04 }}
+                        whileTap={{ scale: 0.97 }}
+                        type="submit"
+                        disabled={apiLoading || apiQuery.length < 2}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 h-8 px-4 flex items-center justify-center bg-slate-900 text-white rounded-lg hover:bg-emerald-800 disabled:opacity-50 transition-colors text-xs shadow-sm"
+                        style={{ fontFamily: "var(--font-poppins)", fontWeight: 700 }}
+                    >
+                        {apiLoading ? <Loader2 className="animate-spin" size={14} /> : "Search"}
+                    </motion.button>
+                </form>
 
-                                return (
-                                    <div key={i} className="glass-panel p-5 rounded-2xl border border-border/50 flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center hover:bg-white/5 transition-colors">
-                                        <div>
-                                            <div className="font-semibold text-lg capitalize">{drugName}</div>
-                                            <div className="text-sm text-muted-foreground mt-1 flex items-center gap-4">
-                                                <span className="font-mono bg-black/30 px-2 py-0.5 rounded border border-white/5">Stock: {item.stock_left || 'N/A'}</span>
-                                                <span className="capitalize">{item.category || 'General'}</span>
-                                            </div>
-                                        </div>
+                {apiResults.length > 0 && (
+                    <div className="mt-5 space-y-3">
+                        <h3
+                            className="text-[10px] uppercase tracking-[0.18em] text-slate-400"
+                            style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                        >
+                            Results ({apiResults.length})
+                        </h3>
+                        {apiResults.map((item, i) => {
+                            const drugName = item.drug_name || item.name;
+                            const recallData = recallActive[drugName];
+                            const isValidating = recallLoading[drugName];
 
-                                        <div className="shrink-0 flex items-center gap-3 w-full sm:w-auto mt-4 sm:mt-0 pt-4 sm:pt-0 border-t sm:border-t-0 border-border/50 sm:pl-4 sm:border-l">
-                                            {!recallData && !isValidating ? (
-                                                <button
-                                                    onClick={() => checkRecall(drugName)}
-                                                    className="w-full sm:w-auto h-9 px-4 rounded-lg bg-black/40 border border-border/50 text-xs font-medium hover:text-accent hover:border-accent/40 transition-colors"
-                                                >
-                                                    Check FDA Recall
-                                                </button>
-                                            ) : isValidating ? (
-                                                <div className="h-9 px-4 flex items-center gap-2 text-xs text-muted-foreground">
-                                                    <Loader2 className="animate-spin" size={14} /> Checking Server...
-                                                </div>
-                                            ) : recallData.recall_detected ? (
-                                                <div className="flex flex-col items-end gap-1 text-right">
-                                                    <span className="flex items-center gap-1.5 text-xs text-red-400 bg-red-400/10 px-3 py-1.5 rounded-lg border border-red-400/20 font-medium">
-                                                        <AlertTriangle size={14} /> Recall Active
-                                                    </span>
-                                                    <a href="#" className="text-[10px] text-muted-foreground hover:text-foreground underline decoration-border underline-offset-2">View Source</a>
-                                                </div>
-                                            ) : (
-                                                <span className="flex items-center gap-1.5 text-xs text-green-400 bg-green-400/10 px-3 py-1.5 rounded-lg border border-green-400/20 font-medium w-full sm:w-auto justify-center">
-                                                    <CheckCircle size={14} /> Cleared
-                                                </span>
-                                            )}
+                            return (
+                                <motion.div
+                                    key={i}
+                                    initial={{ opacity: 0, x: -10 }}
+                                    animate={{ opacity: 1, x: 0 }}
+                                    transition={{ delay: i * 0.06, duration: 0.35 }}
+                                    className="bg-white/60 p-4 rounded-2xl border border-slate-200/60 flex flex-col sm:flex-row gap-3 justify-between items-start sm:items-center hover:shadow-md hover:shadow-slate-100/60 transition-all"
+                                >
+                                    <div>
+                                        <div className="text-sm capitalize text-slate-900" style={{ fontFamily: "var(--font-poppins)", fontWeight: 700 }}>{drugName}</div>
+                                        <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-3" style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}>
+                                            <span className="bg-white border border-slate-100 px-2 py-0.5 rounded-lg text-xs" style={{ fontFamily: "var(--font-poppins)", fontWeight: 600 }}>Stock: {item.stock_left || "N/A"}</span>
+                                            <span className="capitalize">{item.category || "General"}</span>
                                         </div>
                                     </div>
-                                )
-                            })}
-                        </div>
+
+                                    <div className="shrink-0">
+                                        {!recallData && !isValidating ? (
+                                            <motion.button
+                                                whileHover={{ scale: 1.05 }}
+                                                whileTap={{ scale: 0.95 }}
+                                                onClick={() => checkRecall(drugName)}
+                                                className="h-8 px-3 rounded-xl bg-white/80 border border-slate-200/60 text-xs hover:text-emerald-600 hover:border-emerald-200 transition-all text-slate-600 shadow-sm"
+                                                style={{ fontFamily: "var(--font-poppins)", fontWeight: 700 }}
+                                            >
+                                                Check Recall
+                                            </motion.button>
+                                        ) : isValidating ? (
+                                            <div className="h-8 px-3 flex items-center gap-2 text-xs text-slate-500" style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}>
+                                                <Loader2 className="animate-spin" size={14} /> Checking...
+                                            </div>
+                                        ) : recallData.recall_detected ? (
+                                            <span
+                                                className="flex items-center gap-1.5 text-xs text-red-600 bg-red-50 px-3 py-1.5 rounded-xl border border-red-100"
+                                                style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                                            >
+                                                <AlertTriangle size={14} /> Recall Active
+                                            </span>
+                                        ) : (
+                                            <span
+                                                className="flex items-center gap-1.5 text-xs text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-100"
+                                                style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                                            >
+                                                <CheckCircle size={14} /> Cleared
+                                            </span>
+                                        )}
+                                    </div>
+                                </motion.div>
+                            );
+                        })}
                     </div>
                 )}
+            </motion.div>
 
-                {/* Expiring Medications Panel */}
-                <div className="glass-panel rounded-2xl border border-border/50 overflow-hidden">
-                    <div className="p-6 border-b border-border/50 bg-black/20">
-                        <h2 className="text-lg font-semibold flex items-center gap-2"><Clock size={18} className="text-orange-500" /> Expiring Medications</h2>
-                        <p className="text-xs text-muted-foreground mt-1">Medications nearing their expiration date.</p>
-                    </div>
-                    <div className="p-6 bg-[#0a0a0a]">
-                        {expiringLoading ? (
-                            <div className="flex items-center justify-center py-8"><Loader2 className="animate-spin text-muted-foreground" size={24} /></div>
-                        ) : expiring.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center py-8 text-muted-foreground opacity-50 space-y-2">
-                                <Clock size={28} />
-                                <span className="text-sm font-mono uppercase tracking-widest">No expiring medications</span>
-                            </div>
-                        ) : (
-                            <div className="space-y-3">
-                                {expiring.map((med: any, i: number) => (
-                                    <div key={i} className="bg-black/40 border border-white/5 p-4 rounded-xl flex items-center justify-between">
-                                        <div>
-                                            <div className="font-medium text-foreground capitalize text-orange-400">{med.drug_name || med.name}</div>
-                                            <div className="text-xs text-muted-foreground mt-1">Expires: {new Date(med.expiry_date || med.expires_at).toLocaleDateString()}</div>
-                                        </div>
-                                        <span className="text-xs font-mono bg-orange-500/10 text-orange-400 px-2 py-0.5 rounded border border-orange-500/20">
-                                            {med.stock_qty || med.stock_left || 0} units
-                                        </span>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
+            {/* ── Expiring Medications ── */}
+            <motion.div
+                initial={{ opacity: 0, y: 14 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5, delay: 0.25 }}
+                className="bg-white/70 backdrop-blur-xl border border-slate-200/60 rounded-[28px] shadow-[0_8px_30px_rgb(0,0,0,0.04)] overflow-hidden"
+            >
+                <div className="p-6 border-b border-slate-100/80">
+                    <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-xl bg-amber-100 border border-amber-200/60 flex items-center justify-center">
+                            <Clock size={15} className="text-amber-600" />
+                        </div>
+                        <div>
+                            <h2
+                                className="text-base text-slate-900"
+                                style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                            >
+                                Expiring Medications
+                            </h2>
+                            <p
+                                className="text-xs text-slate-500 mt-0.5"
+                                style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}
+                            >
+                                Medications nearing expiration.
+                            </p>
+                        </div>
                     </div>
                 </div>
+                <div className="p-5">
+                    {expiringLoading ? (
+                        <div className="flex items-center justify-center py-8">
+                            <Loader2 className="animate-spin text-emerald-600" size={24} />
+                        </div>
+                    ) : expiring.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-8 text-slate-400 space-y-3">
+                            <div className="w-14 h-14 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-center">
+                                <Clock size={24} />
+                            </div>
+                            <span
+                                className="text-[10px] uppercase tracking-[0.2em]"
+                                style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                            >
+                                No expiring medications
+                            </span>
+                        </div>
+                    ) : (
+                        <div className="space-y-3">
+                            {expiring.map((med: any, i: number) => (
+                                <motion.div
+                                    key={i}
+                                    initial={{ opacity: 0, x: -10 }}
+                                    animate={{ opacity: 1, x: 0 }}
+                                    transition={{ delay: i * 0.06, duration: 0.35 }}
+                                    className="bg-white/60 border border-slate-200/60 p-4 rounded-2xl flex items-center justify-between hover:shadow-md hover:shadow-slate-100/60 transition-all"
+                                >
+                                    <div>
+                                        <div className="text-sm text-slate-900 capitalize" style={{ fontFamily: "var(--font-poppins)", fontWeight: 700 }}>{med.drug_name || med.name}</div>
+                                        <div className="text-xs text-slate-500 mt-0.5" style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}>
+                                            Expires: {new Date(med.expiry_date || med.expires_at).toLocaleDateString()}
+                                        </div>
+                                    </div>
+                                    <span
+                                        className="text-xs bg-amber-50 text-amber-600 px-2.5 py-0.5 rounded-lg border border-amber-100"
+                                        style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                                    >
+                                        {med.stock_qty || med.stock_left || 0} units
+                                    </span>
+                                </motion.div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </motion.div>
 
-            </main>
-
+            {/* ── Edit Stock Modal ── */}
+            <AnimatePresence>
+                {editItem && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4"
+                    >
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                            transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+                            className="bg-white/95 backdrop-blur-xl rounded-[28px] border border-slate-200/60 shadow-xl w-full max-w-sm"
+                        >
+                            <div className="flex items-center justify-between p-6 border-b border-slate-100/80">
+                                <h2
+                                    className="text-base text-slate-900"
+                                    style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                                >
+                                    Update Stock
+                                </h2>
+                                <motion.button
+                                    whileHover={{ scale: 1.1, rotate: 90 }}
+                                    whileTap={{ scale: 0.9 }}
+                                    onClick={() => setEditItem(null)}
+                                    className="w-8 h-8 rounded-xl bg-slate-50 border border-slate-200/60 flex items-center justify-center text-slate-400 hover:text-slate-700 transition-colors"
+                                >
+                                    <X size={14} />
+                                </motion.button>
+                            </div>
+                            <div className="p-6 space-y-4">
+                                <div>
+                                    <div className="text-slate-900" style={{ fontFamily: "var(--font-poppins)", fontWeight: 700 }}>{editItem.drug_name}</div>
+                                    <div className="text-xs text-slate-500" style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}>{editItem.brand} &middot; Batch: {editItem.batch_no}</div>
+                                </div>
+                                <div>
+                                    <label
+                                        className="text-[10px] uppercase tracking-[0.18em] text-slate-400 mb-1.5 block"
+                                        style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                                    >
+                                        Stock Quantity
+                                    </label>
+                                    <input
+                                        type="number"
+                                        value={editStock}
+                                        onChange={(e) => setEditStock(parseInt(e.target.value) || 0)}
+                                        className="w-full h-11 bg-white/70 border border-slate-200/60 rounded-xl px-4 text-sm focus:outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition-all text-slate-900"
+                                        style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}
+                                    />
+                                </div>
+                            </div>
+                            <div className="p-6 border-t border-slate-100/80 flex justify-end gap-3">
+                                <motion.button
+                                    whileHover={{ scale: 1.03 }}
+                                    whileTap={{ scale: 0.97 }}
+                                    onClick={() => setEditItem(null)}
+                                    className="h-10 px-5 rounded-xl border border-slate-200/60 text-slate-600 text-sm hover:bg-slate-50 transition-colors"
+                                    style={{ fontFamily: "var(--font-poppins)", fontWeight: 700 }}
+                                >
+                                    Cancel
+                                </motion.button>
+                                <motion.button
+                                    whileHover={{ scale: 1.04, y: -1 }}
+                                    whileTap={{ scale: 0.97 }}
+                                    onClick={handleSaveStock}
+                                    disabled={saving}
+                                    className="h-10 px-5 bg-slate-900 text-white rounded-xl text-sm hover:bg-emerald-800 disabled:opacity-50 transition-colors flex items-center gap-2 shadow-lg shadow-slate-900/10"
+                                    style={{ fontFamily: "var(--font-poppins)", fontWeight: 700 }}
+                                >
+                                    {saving && <Loader2 className="animate-spin" size={14} />} Save
+                                </motion.button>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </div>
     );
 }
