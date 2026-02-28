@@ -199,10 +199,16 @@ function DashboardContent() {
 
                     <button
                         onClick={handleLogout}
-                        className="w-10 h-10 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 hover:border-red-200 transition-all shadow-sm"
+                        className="group h-10 w-10 hover:w-[110px] rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center gap-0 hover:gap-2 text-slate-400 hover:text-red-500 hover:bg-red-50 hover:border-red-200 transition-all duration-300 ease-in-out shadow-sm overflow-hidden"
                         title="Log out"
                     >
-                        <LogOut size={16} />
+                        <LogOut size={16} className="flex-shrink-0" />
+                        <span
+                            className="whitespace-nowrap text-xs font-bold uppercase tracking-wider max-w-0 group-hover:max-w-[60px] overflow-hidden transition-all duration-300 ease-in-out opacity-0 group-hover:opacity-100"
+                            style={{ fontFamily: "var(--font-poppins)" }}
+                        >
+                            Logout
+                        </span>
                     </button>
                 </div>
             </motion.nav>

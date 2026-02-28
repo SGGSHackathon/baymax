@@ -82,10 +82,12 @@ export default function Home() {
   ];
 
   return (
-    <main className="min-h-screen bg-[#f8fafc] text-slate-900 font-sans selection:bg-emerald-100 relative overflow-hidden flex flex-col items-center justify-center p-6">
+    <main className="min-h-screen bg-transparent text-slate-900 font-sans selection:bg-emerald-100 relative overflow-hidden flex flex-col items-center justify-center p-6">
       <div className="fixed inset-0 overflow-hidden pointer-events-none -z-10">
-        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-emerald-100/40 rounded-full blur-[120px]" />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-teal-100/40 rounded-full blur-[120px]" />
+        <div className="absolute inset-0 bg-gradient-to-b from-emerald-50/80 via-teal-50/40 to-white" />
+        <div className="absolute top-[-20%] left-[10%] w-[60%] h-[50%] bg-emerald-100/50 rounded-full blur-[140px]" />
+        <div className="absolute top-[-10%] right-[-5%] w-[40%] h-[40%] bg-teal-100/40 rounded-full blur-[120px]" />
+        <div className="absolute bottom-[10%] left-[30%] w-[50%] h-[30%] bg-emerald-50/30 rounded-full blur-[100px]" />
       </div>
 
       <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
@@ -124,7 +126,7 @@ export default function Home() {
             transition={{ duration: 0.6 }}
             className="text-7xl md:text-[130px] font-black tracking-tighter leading-[0.8] text-slate-900 flex flex-col items-center"
           >
-            <span style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900, letterSpacing: "-2px", paddingBottom: "15px" }}>BAYMAX</span>
+            <span style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900, letterSpacing: "-2px", paddingBottom: "21px" }}>BAYMAX</span>
             <span
               className="text-emerald-600 md:-mt-4 text-5xl md:text-[85px]"
               style={{ fontFamily: "var(--font-poppins)", textTransform: "none", fontWeight: 500 }}
@@ -143,19 +145,13 @@ export default function Home() {
           initial={{ opacity: 0, y: 15 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.2 }}
-          className="flex flex-col sm:flex-row items-center justify-center gap-4 w-full mb-24"
+          className="flex items-center justify-center w-full mb-24"
         >
           <Link
             href="/signup"
-            className="group w-full sm:w-auto bg-slate-900 text-white font-black px-12 py-5 rounded-3xl hover:bg-emerald-600 transition-all text-xl flex items-center justify-center gap-3 shadow-2xl shadow-slate-900/20 active:scale-[0.97]"
+            className="group bg-slate-900 text-white font-black px-12 py-5 rounded-3xl hover:bg-emerald-600 transition-all text-xl flex items-center justify-center gap-3 shadow-2xl shadow-slate-900/20 active:scale-[0.97]"
           >
             Get Started <ChevronRight size={22} className="group-hover:translate-x-1 transition-transform" />
-          </Link>
-          <Link
-            href="#demo"
-            className="w-full sm:w-auto bg-white text-slate-900 font-black px-12 py-5 rounded-3xl border-2 border-slate-100 hover:border-slate-200 transition-all text-xl active:scale-[0.97] shadow-sm"
-          >
-            Clinical Guide
           </Link>
         </motion.div>
 
