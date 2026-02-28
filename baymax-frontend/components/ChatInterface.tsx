@@ -1,19 +1,234 @@
-"use client";
+﻿"use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Bot, User, Loader2, Info, Mic, Square, PlayCircle } from "lucide-react";
+import { Send, Bot, User, Loader2, Info, Mic, Square, Volume2, VolumeX, ShoppingCart, Package, Minus, Plus, CheckCircle, ExternalLink } from "lucide-react";
 import { dataService } from "@/lib/api";
 import { useToast } from "@/hooks/useToast";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { OrderItem } from "@/types/api";
 
 type Message = {
     id: string;
     role: "user" | "assistant";
     content: string;
-    metadata?: any;
+    metadata?: {
+        triage?: string;
+        emergency?: boolean;
+        audio_base64?: string;
+        agent_used?: string;
+        requires_action?: string;
+        order_items?: OrderItem[];
+        safety_flags?: string[];
+        sources?: string[];
+        web_search_used?: boolean;
+    };
 };
 
+// â”€â”€ Source Chips â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function SourceChips({ sources, webSearchUsed }: { sources?: string[]; webSearchUsed?: boolean }) {
+    if (!sources || sources.length === 0) return null;
+    return (
+        <div className="flex flex-wrap gap-1.5 mt-2">
+            {sources.map((src) => (
+                <span
+                    key={src}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-[10px] font-bold text-emerald-700 tracking-wide"
+                >
+                    {webSearchUsed ? <ExternalLink size={9} /> : <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />}
+                    {src}
+                </span>
+            ))}
+        </div>
+    );
+}
+
+// â”€â”€ Speaker Button â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function SpeakerButton({ text, msgId, onAudio }: { text: string; msgId: string; onAudio: (audio: string, msgId: string) => void }) {
+    const [state, setState] = useState<"idle" | "loading" | "playing">("idle");
+    const audioRef = useRef<HTMLAudioElement | null>(null);
+
+    const handleClick = async () => {
+        if (state === "playing") {
+            audioRef.current?.pause();
+            setState("idle");
+            return;
+        }
+        setState("loading");
+        try {
+            const formData = new FormData();
+            formData.append("text", text);
+            const res = await dataService.playTTS(formData);
+            const audio = new Audio(`data:audio/wav;base64,${res.audio_base64}`);
+            audioRef.current = audio;
+            audio.onended = () => setState("idle");
+            audio.onpause = () => setState("idle");
+            audio.play();
+            setState("playing");
+            onAudio(res.audio_base64, msgId);
+        } catch {
+            setState("idle");
+        }
+    };
+
+    return (
+        <button
+            onClick={handleClick}
+            title={state === "playing" ? "Stop speaking" : "Read aloud"}
+            className={`w-6 h-6 flex items-center justify-center rounded-full mt-1 transition-all
+                ${state === "playing"
+                    ? "bg-emerald-100 text-emerald-600 animate-pulse"
+                    : state === "loading"
+                        ? "bg-slate-100 text-slate-300 cursor-wait"
+                        : "bg-transparent text-slate-300 hover:text-emerald-500 hover:bg-emerald-50"
+                }`}
+        >
+            {state === "loading" ? (
+                <Loader2 size={12} className="animate-spin" />
+            ) : state === "playing" ? (
+                <VolumeX size={12} />
+            ) : (
+                <Volume2 size={12} />
+            )}
+        </button>
+    );
+}
+
+// â”€â”€ OrderCard Component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function OrderCard({
+    items,
+    requiresAction,
+    onSendMessage,
+}: {
+    items: OrderItem[];
+    requiresAction?: string;
+    onSendMessage: (msg: string) => void;
+}) {
+    const [quantities, setQuantities] = useState<Record<string, number>>(() => {
+        const init: Record<string, number> = {};
+        items.forEach(item => { init[item.drug_name] = 10; });
+        return init;
+    });
+    const [ordered, setOrdered] = useState(false);
+
+    const updateQty = (drugName: string, delta: number) => {
+        setQuantities(prev => ({
+            ...prev,
+            [drugName]: Math.max(1, Math.min((prev[drugName] || 10) + delta, items.find(i => i.drug_name === drugName)?.stock_qty || 999))
+        }));
+    };
+
+    const handleOrder = (item: OrderItem) => {
+        const qty = quantities[item.drug_name] || 10;
+        onSendMessage(String(qty));
+        setOrdered(true);
+    };
+
+    if (items.length === 0) return null;
+
+    return (
+        <div className="mt-3 space-y-3">
+            {items.map((item) => {
+                const qty = quantities[item.drug_name] || 10;
+                const total = (qty * item.price_per_unit).toFixed(2);
+                return (
+                    <div key={item.drug_name} className="bg-gradient-to-br from-white to-slate-50 border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+                        {/* Header */}
+                        <div className="px-4 py-3 bg-emerald-50 border-b border-emerald-100 flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center">
+                                    <Package size={16} className="text-emerald-600" />
+                                </div>
+                                <div>
+                                    <h4 className="font-bold text-sm text-slate-900">
+                                        {item.brand_name || item.drug_name}
+                                    </h4>
+                                    {item.brand_name && item.brand_name !== item.drug_name && (
+                                        <p className="text-[10px] text-slate-500 font-medium">{item.drug_name} {item.strength}</p>
+                                    )}
+                                </div>
+                            </div>
+                            <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] font-black uppercase tracking-widest rounded-md">
+                                In Stock
+                            </span>
+                        </div>
+
+                        {/* Details Grid */}
+                        <div className="px-4 py-3 grid grid-cols-3 gap-3 text-center">
+                            <div>
+                                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Available</p>
+                                <p className="text-sm font-bold text-slate-700 mt-0.5">{item.stock_qty} {item.unit}s</p>
+                            </div>
+                            <div>
+                                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Price</p>
+                                <p className="text-sm font-bold text-slate-700 mt-0.5">â‚¹{item.price_per_unit}/{item.unit}</p>
+                            </div>
+                            <div>
+                                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Type</p>
+                                <p className="text-sm font-bold mt-0.5">
+                                    {item.is_otc
+                                        ? <span className="text-emerald-600">OTC âœ“</span>
+                                        : <span className="text-amber-600">Rx Needed</span>
+                                    }
+                                </p>
+                            </div>
+                        </div>
+
+                        {/* Quantity Picker + Order Button */}
+                        {requiresAction === "order_quantity" && !ordered && (
+                            <div className="px-4 py-3 border-t border-slate-100 flex items-center justify-between gap-3">
+                                <div className="flex items-center gap-1">
+                                    <button
+                                        onClick={() => updateQty(item.drug_name, -1)}
+                                        className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center transition-colors"
+                                    >
+                                        <Minus size={14} />
+                                    </button>
+                                    <input
+                                        type="number"
+                                        min={1}
+                                        max={item.stock_qty}
+                                        value={qty}
+                                        onChange={(e) => {
+                                            const v = parseInt(e.target.value) || 1;
+                                            setQuantities(prev => ({ ...prev, [item.drug_name]: Math.max(1, Math.min(v, item.stock_qty)) }));
+                                        }}
+                                        className="w-16 h-8 text-center bg-white border border-slate-200 rounded-lg text-sm font-bold text-slate-900 focus:outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-100"
+                                    />
+                                    <button
+                                        onClick={() => updateQty(item.drug_name, 1)}
+                                        className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center transition-colors"
+                                    >
+                                        <Plus size={14} />
+                                    </button>
+                                    <span className="text-xs font-bold text-slate-400 ml-2">{item.unit}s</span>
+                                </div>
+
+                                <div className="flex items-center gap-3">
+                                    <span className="text-sm font-bold text-slate-700">â‚¹{total}</span>
+                                    <button
+                                        onClick={() => handleOrder(item)}
+                                        className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-700 transition-all active:scale-[0.97] flex items-center gap-1.5 shadow-sm"
+                                    >
+                                        <ShoppingCart size={12} /> Order
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        {ordered && (
+                            <div className="px-4 py-3 border-t border-emerald-100 bg-emerald-50/50 flex items-center gap-2 text-xs font-bold text-emerald-700">
+                                <CheckCircle size={14} /> Order request sent â€” check below for confirmation.
+                            </div>
+                        )}
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
+// â”€â”€ Main Chat Component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export default function ChatInterface({ phone }: { phone: string }) {
     const { toast } = useToast();
     const [messages, setMessages] = useState<Message[]>([
@@ -30,6 +245,21 @@ export default function ChatInterface({ phone }: { phone: string }) {
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [messages, isLoading]);
+
+    const handleAudio = (audio_base64: string, msgId: string) => {
+        setMessages(prev => prev.map(m =>
+            m.id === msgId ? { ...m, metadata: { ...m.metadata, audio_base64 } } : m
+        ));
+    };
+
+    // Helper: programmatically send a message (used by OrderCard)
+    const sendMessage = (text: string) => {
+        setInput(text);
+        setTimeout(() => {
+            const form = document.getElementById("chat-form") as HTMLFormElement;
+            if (form) form.requestSubmit();
+        }, 50);
+    };
 
     const handleSend = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -62,6 +292,8 @@ export default function ChatInterface({ phone }: { phone: string }) {
             const decoder = new TextDecoder();
             let accumulated = "";
             let buffer = "";
+            let finalSources: string[] = [];
+            let finalWebSearch = false;
 
             while (true) {
                 const { done, value } = await reader.read();
@@ -74,10 +306,46 @@ export default function ChatInterface({ phone }: { phone: string }) {
                     if (!line.startsWith("data: ")) continue;
                     try {
                         const payload = JSON.parse(line.slice(6));
-                        if (payload.type === "token" && payload.text) {
-                            accumulated += payload.text;
-                            const snapshot = accumulated;
-                            setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: snapshot } : m));
+
+                        // â”€â”€ Graph result (order agent, action flows) â”€â”€
+                        if (payload.type === "graph_result") {
+                            finalSources = payload.sources || [];
+                            finalWebSearch = payload.web_search_used || false;
+                            const graphMsg: Message = {
+                                id: assistantId,
+                                role: "assistant",
+                                content: payload.text || "",
+                                metadata: {
+                                    agent_used: payload.agent_used,
+                                    requires_action: payload.requires_action,
+                                    order_items: payload.order_items,
+                                    emergency: payload.emergency,
+                                    safety_flags: payload.safety_flags,
+                                    sources: finalSources,
+                                    web_search_used: finalWebSearch,
+                                },
+                            };
+                            accumulated = payload.text || "";
+                            setMessages(prev => prev.map(m => m.id === assistantId ? graphMsg : m));
+                            continue;
+                        }
+
+                        // â”€â”€ Token streaming â”€â”€
+                        if (payload.type === "token") {
+                            if (payload.text) {
+                                accumulated += payload.text;
+                                const snapshot = accumulated;
+                                setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: snapshot } : m));
+                            }
+                            // done=true carries final sources
+                            if (payload.done) {
+                                finalSources = payload.sources || [];
+                                setMessages(prev => prev.map(m =>
+                                    m.id === assistantId
+                                        ? { ...m, metadata: { ...m.metadata, sources: finalSources } }
+                                        : m
+                                ));
+                            }
                         }
                     } catch { }
                 }
@@ -87,23 +355,13 @@ export default function ChatInterface({ phone }: { phone: string }) {
                 setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: "No response received." } : m));
             }
         } catch {
-            try {
-                const resp = await dataService.chat(phone, messageText);
-                const assistantMsg: Message = { id: assistantId, role: "assistant", content: resp.reply || "No response received.", metadata: { triage: resp.triage_level, emergency: resp.emergency } };
-                setMessages(prev => {
-                    const exists = prev.find(m => m.id === assistantId);
-                    if (exists) return prev.map(m => m.id === assistantId ? assistantMsg : m);
-                    return [...prev, assistantMsg];
-                });
-            } catch {
-                toast("Failed to get response. Please try again.", "error");
-                setMessages(prev => {
-                    const errMsg: Message = { id: assistantId, role: "assistant", content: "System encountered an anomaly. Please try again." };
-                    const exists = prev.find(m => m.id === assistantId);
-                    if (exists) return prev.map(m => m.id === assistantId ? errMsg : m);
-                    return [...prev, errMsg];
-                });
-            }
+            toast("Failed to get response. Please try again.", "error");
+            setMessages(prev => {
+                const errMsg: Message = { id: assistantId, role: "assistant", content: "System encountered an anomaly. Please try again." };
+                const exists = prev.find(m => m.id === assistantId);
+                if (exists) return prev.map(m => m.id === assistantId ? errMsg : m);
+                return [...prev, errMsg];
+            });
         } finally {
             setIsLoading(false);
         }
@@ -122,9 +380,9 @@ export default function ChatInterface({ phone }: { phone: string }) {
                 stream.getTracks().forEach(track => track.stop());
                 if (!phone) return;
                 setIsLoading(true);
-                setMessages(prev => [...prev, { id: Date.now().toString(), role: "user", content: "🎤 Sent voice note" }]);
+                setMessages(prev => [...prev, { id: Date.now().toString(), role: "user", content: "ðŸŽ¤ Sent voice note" }]);
                 try {
-                    const resp = await dataService.sendVoice(phone, audioBlob);
+                    const resp = await dataService.sendVoice(phone, audioBlob, phone);
                     setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), role: "assistant", content: resp.reply || "Voice processed.", metadata: { triage: (resp as any).triage_level, emergency: resp.emergency, audio_base64: resp.audio_base64 } }]);
                 } catch { toast("Voice processing failed", "error"); } finally { setIsLoading(false); }
             };
@@ -133,19 +391,10 @@ export default function ChatInterface({ phone }: { phone: string }) {
         } catch { toast("Microphone access is required for voice chat", "error"); }
     };
 
-    const handleTTS = async (text: string, msgId: string) => {
-        try {
-            const formData = new FormData();
-            formData.append("text", text);
-            const res = await dataService.playTTS(formData);
-            setMessages(prev => prev.map(m => m.id === msgId ? { ...m, metadata: { ...m.metadata, audio_base64: res.audio_base64 } } : m));
-        } catch { toast("Audio generation failed", "error"); }
-    };
-
     return (
-        <div className="flex flex-col h-full bg-white rounded-[28px] border border-slate-200 shadow-[0_4px_20px_rgb(0,0,0,0.03)] overflow-hidden relative z-10">
+        <div className="flex flex-col h-full bg-white rounded-[28px] border border-slate-200 shadow-[0_4px_20px_rgb(0,0,0,0.03)] overflow-hidden">
             {/* Chat header */}
-            <div className="h-14 border-b border-slate-100 bg-white/80 backdrop-blur-md flex items-center px-4 justify-between z-20 absolute top-0 w-full">
+            <div className="shrink-0 h-14 border-b border-slate-100 bg-white flex items-center px-4 justify-between">
                 <div className="flex items-center gap-2">
                     <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                     <span className="text-sm font-bold tracking-tight text-slate-900">Baymax Core <span className="text-slate-400 font-mono text-xs">v6.0</span></span>
@@ -153,7 +402,7 @@ export default function ChatInterface({ phone }: { phone: string }) {
             </div>
 
             {/* Messages area */}
-            <div className="flex-1 overflow-y-auto p-4 pt-20 space-y-6 bg-slate-50/50">
+            <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-6 bg-slate-50/50">
                 {messages.map(msg => (
                     <div key={msg.id} className={`flex gap-3 max-w-[85%] transition-all duration-300 ${msg.role === "user" ? "ml-auto flex-row-reverse" : "mr-auto"}`}>
                         <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${msg.role === "user" ? "bg-slate-900 text-white" : "bg-emerald-100 border border-emerald-200 text-emerald-700"}`}>
@@ -167,15 +416,33 @@ export default function ChatInterface({ phone }: { phone: string }) {
                                     </div>
                                 ) : msg.content}
                             </div>
-                            {msg.metadata?.audio_base64 ? (
-                                <audio controls autoPlay={msg.role === "assistant"} className="h-8 max-w-[200px] mt-1 opacity-70 hover:opacity-100 transition-opacity">
-                                    <source src={`data:audio/wav;base64,${msg.metadata.audio_base64}`} type="audio/wav" />
-                                </audio>
-                            ) : msg.role === "assistant" && (
-                                <button onClick={() => handleTTS(msg.content, msg.id)} className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-emerald-600 mt-1 transition-colors px-1 font-bold">
-                                    <PlayCircle size={12} /> Play Audio
-                                </button>
+
+                            {/* Order Card */}
+                            {msg.metadata?.order_items && msg.metadata.order_items.length > 0 && (
+                                <OrderCard
+                                    items={msg.metadata.order_items}
+                                    requiresAction={msg.metadata.requires_action}
+                                    onSendMessage={sendMessage}
+                                />
                             )}
+
+                            {/* Sources */}
+                            {msg.role === "assistant" && (
+                                <SourceChips
+                                    sources={msg.metadata?.sources}
+                                    webSearchUsed={msg.metadata?.web_search_used}
+                                />
+                            )}
+
+                            {/* Speaker button (assistant only, shown when content exists) */}
+                            {msg.role === "assistant" && msg.content && (
+                                <SpeakerButton
+                                    text={msg.content}
+                                    msgId={msg.id}
+                                    onAudio={handleAudio}
+                                />
+                            )}
+
                             {msg.metadata?.emergency && (
                                 <div className="flex items-center gap-1.5 text-xs text-red-600 mt-1 bg-red-50 px-2 py-1 rounded-lg w-fit border border-red-100 font-bold">
                                     <Info size={12} /> Emergency Protocol Engaged
@@ -198,8 +465,8 @@ export default function ChatInterface({ phone }: { phone: string }) {
             </div>
 
             {/* Input area */}
-            <div className="p-3 bg-white border-t border-slate-100 sticky bottom-0 z-20">
-                <form onSubmit={handleSend} className="relative flex items-center">
+            <div className="shrink-0 p-3 bg-white border-t border-slate-100">
+                <form id="chat-form" onSubmit={handleSend} className="relative flex items-center">
                     <input
                         type="text" value={input} onChange={e => setInput(e.target.value)} disabled={isLoading}
                         placeholder="Describe your symptoms or ask a medical query..."

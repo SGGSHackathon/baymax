@@ -25,8 +25,8 @@ function DashboardContent() {
     const router = useRouter();
     const { user: profile, logout } = useAuth();
 
-    const handleLogout = () => {
-        logout();
+    const handleLogout = async () => {
+        await logout();
         router.push("/");
     };
 
@@ -62,7 +62,7 @@ function DashboardContent() {
         {
             title: "WhatsApp Agent",
             icon: <MessageCircle size={36} />,
-            href: "https://wa.me/911234567890",
+            href: "https://wa.me/919309480956",
             colorClass: "from-green-500 to-emerald-600",
             lightClass: "bg-green-50 text-green-600",
             description: "Get 24/7 pharmaceutical support directly on WhatsApp.",

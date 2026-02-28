@@ -25,17 +25,17 @@ CREATE TABLE IF NOT EXISTS users (
     name                TEXT,
     age                 INTEGER CHECK (age > 0 AND age < 150),
     gender              TEXT CHECK (gender IN ('male','female','other')),
-    is_pregnant         BOOLEAN DEFAULT FALSE,
+    is_pregnant         BOOLEAN,              -- NULL = unknown
     blood_group         TEXT,
     weight_kg           NUMERIC(5,1),
     height_cm           NUMERIC(5,1),
-    allergies           TEXT[]  DEFAULT '{}',
-    chronic_conditions  TEXT[]  DEFAULT '{}',
+    allergies           TEXT[],                -- NULL = not yet collected
+    chronic_conditions  TEXT[],                -- NULL = not yet collected
     onboarded           BOOLEAN DEFAULT FALSE,
     onboarding_step     TEXT DEFAULT 'name',
     preferred_language  TEXT DEFAULT 'en-IN',
-    overall_adherence   NUMERIC(5,2) DEFAULT 100.0,   -- V3: rolling adherence score
-    health_risk_score   INTEGER DEFAULT 0,             -- V3: composite risk score
+    overall_adherence   NUMERIC(5,2),                 -- NULL until computed from real data
+    health_risk_score   INTEGER,                       -- NULL until computed from real data
     created_at          TIMESTAMPTZ DEFAULT NOW(),
     updated_at          TIMESTAMPTZ DEFAULT NOW()
 );
@@ -913,7 +913,7 @@ CREATE TABLE IF NOT EXISTS prescription_uploads (
     file_size_bytes BIGINT,
     sarvam_job_id   TEXT,                -- Sarvam Vision job ID
     ocr_status      TEXT DEFAULT 'pending'
-                    CHECK (ocr_status IN ('pending','processing','completed','failed')),
+                    CHECK (ocr_status IN ('pending','processing','downloading','ocr_running','extracting','matching','completed','failed')),
     raw_extracted_text TEXT,              -- full OCR text from Sarvam Vision
     error_message   TEXT,
     processed_at    TIMESTAMPTZ,
@@ -1044,3 +1044,31 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS pincode TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS city TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS country TEXT DEFAULT 'India';
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+
+-- ══════════════════════════════════════════════════════════════
+-- Medicine Courses — tracks a user's active medicine course
+-- ══════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS medicine_courses (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    reminder_id     UUID REFERENCES reminders(id) ON DELETE SET NULL,
+    order_id        UUID REFERENCES orders(id) ON DELETE SET NULL,
+    drug_name       TEXT NOT NULL,
+    dose            TEXT,
+    frequency       INTEGER DEFAULT 1,
+    times           TEXT[],
+    meal_instruction TEXT,
+    duration_days   INTEGER,
+    start_date      DATE DEFAULT CURRENT_DATE,
+    end_date        DATE,
+    total_qty       INTEGER,
+    qty_remaining   INTEGER,
+    doses_taken     INTEGER DEFAULT 0,
+    doses_skipped   INTEGER DEFAULT 0,
+    status          TEXT DEFAULT 'active' CHECK (status IN ('active', 'completed', 'paused', 'cancelled')),
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_courses_user ON medicine_courses(user_id) WHERE status = 'active';
+CREATE TRIGGER IF NOT EXISTS set_courses_updated BEFORE UPDATE ON medicine_courses
+    FOR EACH ROW EXECUTE PROCEDURE trigger_set_timestamp();

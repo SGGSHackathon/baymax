@@ -10,7 +10,7 @@ export interface AuthContextType {
     isLoading: boolean;
     login: (identifier: string, password: string) => Promise<void>;
     signup: (data: Record<string, any>) => Promise<void>;
-    logout: () => void;
+    logout: () => Promise<void>;
     refreshUser: () => Promise<void>;
 }
 
@@ -67,8 +67,8 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
         setUser(me as UserProfile);
     }, []);
 
-    const logout = useCallback(() => {
-        authService.logout();
+    const logout = useCallback(async () => {
+        await authService.logout();
         setUser(null);
     }, []);
 

@@ -1324,6 +1324,27 @@ async def order_agent(state: MedState) -> MedState:
         # Clear yes/no during confirm stage → skip LLM
         yes_words = {"yes", "y", "haan", "ha", "ok", "okay", "sure", "proceed", "confirm", "kar do", "karo"}
         no_words = {"no", "n", "nahi", "nah", "cancel", "nope", "rehne do", "mat karo"}
+
+        # ── Fast-path: awaiting_dup_confirm ──
+        if stage == "awaiting_dup_confirm":
+            if msg_lower in yes_words:
+                logger.info(f"Fast-path: dup confirm yes for {drug} (skipped LLM)")
+                dup_data = await r_get_json(f"dup_override:{phone}")
+                if dup_data:
+                    await r_del(f"dup_override:{phone}")
+                    await r_del(f"pending_action:{phone}")
+                    override_qty = dup_data.get("qty", 10)
+                    override_inv = dup_data.get("inv", inv)
+                    return await _execute_order_safe(state, drug, override_inv, user, override_qty, cde, skip_dup_check=True)
+                return await _execute_order_safe(state, drug, inv, user, 10, cde, skip_dup_check=True)
+            if msg_lower in no_words:
+                logger.info(f"Fast-path: dup confirm cancelled for {drug} (skipped LLM)")
+                await r_del(f"pending_action:{phone}")
+                await r_del(f"dup_override:{phone}")
+                return {**state,
+                        "reply": "Order cancelled. Let me know if you need anything else. 😊",
+                        "agent_used": "order_agent"}
+
         if stage in ("awaiting_confirm", "order_confirm"):
             if msg_lower in yes_words:
                 logger.info(f"Fast-path: confirm yes for {drug} (skipped LLM)")
@@ -1455,9 +1476,9 @@ async def order_agent(state: MedState) -> MedState:
                         await r_del(f"pending_action:{phone}")
                         override_qty = dup_data.get("qty", 10)
                         override_inv = dup_data.get("inv", inv)
-                        return await _execute_order_safe(state, drug, override_inv, user, override_qty, cde)
+                        return await _execute_order_safe(state, drug, override_inv, user, override_qty, cde, skip_dup_check=True)
                     # Fallback — just execute
-                    return await _execute_order_safe(state, drug, inv, user, 10, cde)
+                    return await _execute_order_safe(state, drug, inv, user, 10, cde, skip_dup_check=True)
                 elif understood["is_cancel"]:
                     await r_del(f"pending_action:{phone}")
                     await r_del(f"dup_override:{phone}")
@@ -1659,7 +1680,8 @@ async def order_agent(state: MedState) -> MedState:
 
 
 async def _execute_order_safe(state: MedState, drug_name: str, inv: dict,
-                               user: dict, qty: int, cde: dict = None) -> MedState:
+                               user: dict, qty: int, cde: dict = None,
+                               skip_dup_check: bool = False) -> MedState:
     """Transaction-safe order with full safety pre-checks."""
     phone      = state["phone"]
     patient_id = state.get("patient_id") or str(user["id"])
@@ -1679,12 +1701,16 @@ async def _execute_order_safe(state: MedState, drug_name: str, inv: dict,
                     "safety_flags": ["CDE_BLOCKED_AT_EXECUTION"]}
 
     # ── SAFETY PRE-CHECK 2: Duplicate order detection ──
-    dup = await check_duplicate_order(uid, drug_name, patient_id)
+    if skip_dup_check:
+        logger.info(f"Skipping dup check for {drug_name} — user confirmed override")
+        dup = None
+    else:
+        dup = await check_duplicate_order(uid, drug_name, patient_id)
     if dup:
         dup_qty = dup.get("quantity", 0)
         dup_status = dup.get("status", "pending")
         dup_time = dup.get("ordered_at", "")
-        time_str = dup_time.strftime("%h:%M %p") if hasattr(dup_time, 'strftime') else str(dup_time)[:16]
+        time_str = dup_time.strftime("%b %d, %I:%M %p") if hasattr(dup_time, 'strftime') else str(dup_time)[:16]
 
         # Check if there's a pending_confirm for duplicate override
         dup_override = await r_get_json(f"dup_override:{phone}")
@@ -1801,7 +1827,18 @@ async def _execute_order_safe(state: MedState, drug_name: str, inv: dict,
             await pool.execute(
                 "UPDATE reminders SET qty_remaining=qty_remaining+$2, total_qty=total_qty+$2, updated_at=NOW() WHERE id=$1",
                 existing_reminder_id, qty)
-            logger.info(f"Reorder: updated reminder {existing_reminder_id} qty +{qty}")
+            # Also update medicine_course: replenish qty and reactivate if completed
+            await pool.execute(
+                """UPDATE medicine_courses
+                   SET qty_remaining=qty_remaining+$2, total_qty=total_qty+$2,
+                       status='active', updated_at=NOW()
+                   WHERE reminder_id=$1 AND status IN ('active','completed')""",
+                existing_reminder_id, qty)
+            # Reactivate the reminder if it was auto-completed
+            await pool.execute(
+                "UPDATE reminders SET is_active=TRUE WHERE id=$1",
+                existing_reminder_id)
+            logger.info(f"Reorder: updated reminder + course {existing_reminder_id} qty +{qty}")
         await r_del(f"pending_reorder:{phone}")
 
     total = round(float(locked["price_per_unit"]) * qty, 2)

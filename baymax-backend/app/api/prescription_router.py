@@ -105,6 +105,7 @@ def _fetch_prescription_by_id(conn, prescription_id: str) -> dict | None:
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("""
             SELECT id, user_id, s3_key, file_type, ocr_status,
+                   sarvam_job_id, raw_extracted_text,
                    error_message, processed_at, created_at
             FROM prescription_uploads WHERE id = %s
         """, (prescription_id,))
@@ -279,70 +280,101 @@ def run_sarvam_ocr(file_bytes: bytes, file_type: str) -> tuple[str, str]:
     """Run Sarvam Vision OCR. Returns (extracted_text, sarvam_job_id)."""
     logger.info(f"Starting Sarvam Vision OCR for file_type={file_type}")
 
-    # Sarvam Vision only natively accepts PDF/ZIP. Convert images to PDF on the fly.
+    # Sarvam Vision only natively accepts PDF/ZIP. Convert images to PDF at FULL resolution
+    # for maximum OCR accuracy — do NOT resize.
     if file_type in ("jpg", "jpeg", "png"):
         try:
             from PIL import Image
             import io
             image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
-            
-            # Resize image if it's too large to prevent Sarvam Vision from hanging
-            max_dimension = 2000
-            if max(image.size) > max_dimension:
-                ratio = max_dimension / max(image.size)
-                new_size = (int(image.size[0] * ratio), int(image.size[1] * ratio))
-                image = image.resize(new_size, Image.Resampling.LANCZOS)
-                
+            logger.info(f"Image dimensions: {image.size[0]}x{image.size[1]}")
             pdf_bytes = io.BytesIO()
-            image.save(pdf_bytes, format="PDF", resolution=100.0, save_all=True)
+            # Use DPI 150 for a good balance of quality and file size
+            image.save(pdf_bytes, format="PDF", resolution=150.0, save_all=True)
             file_bytes = pdf_bytes.getvalue()
             file_type = "pdf"
-            logger.info("Successfully converted and resized image to PDF for Sarvam processing.")
+            logger.info(f"Converted image to PDF ({len(file_bytes)} bytes) at full resolution for max accuracy.")
         except Exception as e:
             logger.error(f"Image to PDF conversion failed: {e}")
             raise RuntimeError(f"Failed to convert image to PDF: {e}")
 
-    job = sarvam_client.document_intelligence.create_job(language="en-IN", output_format="md")
-    sarvam_job_id = job.job_id
+    MAX_RETRIES = 2
+    last_error = None
 
-    suffix = f".{file_type}"
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(file_bytes)
-        tmp_path = tmp.name
-
-    try:
-        job.upload_file(tmp_path)
-        job.start()
-        
+    for attempt in range(1, MAX_RETRIES + 1):
         try:
-            # Add a 600 second timeout to avoid infinite spinning but allow for accurate processing
-            status = job.wait_until_complete(timeout=600.0)
-        except TimeoutError:
-            raise RuntimeError("Sarvam Vision OCR timed out after 600 seconds")
-        
-        if status.job_state not in ("Completed", "PartiallyCompleted"):
-            raise RuntimeError(f"Sarvam Vision job failed: {status.job_state}")
+            job = sarvam_client.document_intelligence.create_job(language="en-IN", output_format="md")
+            sarvam_job_id = job.job_id
+            logger.info(f"Sarvam job created: {sarvam_job_id} (attempt {attempt}/{MAX_RETRIES})")
 
-        try:
-            job.get_page_metrics()
-        except Exception:
-            pass
+            suffix = f".{file_type}"
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp.write(file_bytes)
+                tmp_path = tmp.name
 
-        output_dir = tempfile.mkdtemp()
-        output_zip_path = os.path.join(output_dir, "output.zip")
-        job.download_output(output_zip_path)
+            try:
+                job.upload_file(tmp_path)
+                logger.info(f"File uploaded to Sarvam job {sarvam_job_id}")
+                job.start()
+                logger.info(f"Sarvam job {sarvam_job_id} started, waiting for completion...")
 
-        extracted_text = ""
-        with zipfile.ZipFile(output_zip_path, "r") as zf:
-            for name in sorted(zf.namelist()):
-                if name.endswith((".md", ".html", ".txt")):
-                    content = zf.read(name).decode("utf-8", errors="replace")
-                    extracted_text += content + "\n\n"
+                try:
+                    status = job.wait_until_complete(timeout=600.0)
+                except (TimeoutError, Exception) as wait_err:
+                    logger.warning(f"Sarvam wait error (attempt {attempt}): {wait_err}")
+                    last_error = wait_err
+                    if attempt < MAX_RETRIES:
+                        continue
+                    raise RuntimeError(f"Sarvam Vision OCR timed out/failed after {MAX_RETRIES} attempts: {wait_err}")
 
-        logger.info(f"OCR extracted {len(extracted_text)} chars")
-        return extracted_text.strip(), sarvam_job_id
-    finally:
-        os.unlink(tmp_path)
+                if status.job_state not in ("Completed", "PartiallyCompleted"):
+                    logger.warning(f"Sarvam job state: {status.job_state} (attempt {attempt})")
+                    last_error = RuntimeError(f"Job state: {status.job_state}")
+                    if attempt < MAX_RETRIES:
+                        continue
+                    raise RuntimeError(f"Sarvam Vision job failed after {MAX_RETRIES} attempts: {status.job_state}")
+
+                try:
+                    metrics = job.get_page_metrics()
+                    logger.info(f"Sarvam page metrics: {metrics}")
+                except Exception:
+                    pass
+
+                output_dir = tempfile.mkdtemp()
+                output_zip_path = os.path.join(output_dir, "output.zip")
+                job.download_output(output_zip_path)
+
+                extracted_text = ""
+                with zipfile.ZipFile(output_zip_path, "r") as zf:
+                    for name in sorted(zf.namelist()):
+                        if name.endswith((".md", ".html", ".txt", ".json")):
+                            content = zf.read(name).decode("utf-8", errors="replace")
+                            extracted_text += content + "\n\n"
+
+                if not extracted_text.strip():
+                    logger.warning(f"Sarvam returned empty text (attempt {attempt})")
+                    last_error = RuntimeError("Sarvam returned empty OCR result")
+                    if attempt < MAX_RETRIES:
+                        continue
+                    raise RuntimeError("Sarvam Vision returned empty text after retries")
+
+                logger.info(f"OCR extracted {len(extracted_text)} chars on attempt {attempt}")
+                return extracted_text.strip(), sarvam_job_id
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+
+        except RuntimeError:
+            raise
+        except Exception as e:
+            logger.error(f"Sarvam OCR attempt {attempt} error: {e}")
+            last_error = e
+            if attempt >= MAX_RETRIES:
+                raise RuntimeError(f"Sarvam Vision OCR failed after {MAX_RETRIES} attempts: {e}")
+
+    raise RuntimeError(f"Sarvam Vision OCR exhausted retries: {last_error}")
 
 
 def extract_prescription_data_llm(ocr_text: str) -> dict:
@@ -608,10 +640,24 @@ def match_drugs_pinecone(drug_candidates: list[dict]) -> list[dict]:
 # BACKGROUND PROCESSING TASK
 # ══════════════════════════════════════════════════════════════
 
+def _update_ocr_status(conn, prescription_id: str, status: str, error_message: str | None = None):
+    """Quick helper to update just the ocr_status (and optionally error_message) for progress tracking."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE prescription_uploads SET ocr_status=%s, error_message=%s, updated_at=NOW() WHERE id=%s",
+                (status, error_message, prescription_id),
+            )
+        conn.commit()
+    except Exception as e:
+        logger.warning(f"Status update failed: {e}")
+
+
 def process_prescription_background(prescription_id: str, user_id: str, s3_key: str):
     """
     Background task: S3 download → Sarvam OCR → Groq LLM → Pinecone → DB.
     Called by POST /prescriptions/process.
+    Stores intermediate status so the frontend can show real progress.
     """
     conn = None
     sarvam_job_id = ""
@@ -619,45 +665,56 @@ def process_prescription_background(prescription_id: str, user_id: str, s3_key: 
     try:
         conn = get_db_connection()
 
-        # 1. Download from S3
+        # Stage 1: Download from S3
+        _update_ocr_status(conn, prescription_id, "downloading")
         file_bytes, file_type = download_s3_file(BUCKET_NAME, s3_key)
+        logger.info(f"[{prescription_id}] Downloaded {len(file_bytes)} bytes from S3")
 
-        # 2. Update status → processing
+        # Stage 2: Sarvam Vision OCR
+        _update_ocr_status(conn, prescription_id, "ocr_running")
         save_prescription_upload(
             conn, prescription_id, user_id, BUCKET_NAME, s3_key,
-            file_type, len(file_bytes), "", "processing", None,
+            file_type, len(file_bytes), "", "ocr_running", None,
         )
 
-        # 3. Sarvam Vision OCR
         extracted_text, sarvam_job_id = run_sarvam_ocr(file_bytes, file_type)
-        logger.info(f"OCR done: {len(extracted_text)} chars")
+        logger.info(f"[{prescription_id}] OCR done: {len(extracted_text)} chars")
 
-        # 4. Groq LLM extraction
+        # Stage 3: Save raw OCR text immediately (even if LLM/Pinecone fails later)
+        save_prescription_upload(
+            conn, prescription_id, user_id, BUCKET_NAME, s3_key,
+            file_type, len(file_bytes), sarvam_job_id, "extracting", extracted_text,
+        )
+
+        # Stage 4: Groq LLM extraction
+        _update_ocr_status(conn, prescription_id, "extracting")
         prescription_data = extract_prescription_data_llm(extracted_text)
         drug_candidates = prescription_data["drugs"]
         observations = prescription_data["observations"]
-        logger.info(f"LLM found {len(drug_candidates)} drugs, {len(observations)} observations")
+        logger.info(f"[{prescription_id}] LLM found {len(drug_candidates)} drugs, {len(observations)} observations")
 
-        # 5. Pinecone drug matching
+        # Stage 5: Pinecone drug matching
+        _update_ocr_status(conn, prescription_id, "matching")
         matched_drugs = match_drugs_pinecone(drug_candidates)
-        logger.info(f"Pinecone matched {len(matched_drugs)} drugs")
+        logger.info(f"[{prescription_id}] Pinecone matched {len(matched_drugs)} drugs")
 
-        # 6. Update prescription → completed
+        # Stage 6: Final — mark completed
         save_prescription_upload(
             conn, prescription_id, user_id, BUCKET_NAME, s3_key,
             file_type, len(file_bytes), sarvam_job_id, "completed", extracted_text,
         )
 
-        # 7. Save drugs + observations
+        # Stage 7: Save drugs + observations
         save_extracted_drugs(conn, prescription_id, user_id, matched_drugs)
         save_observations(conn, prescription_id, user_id, observations)
 
-        logger.info(f"Prescription {prescription_id} processed successfully")
+        logger.info(f"[{prescription_id}] Prescription processed successfully")
 
     except Exception as e:
         logger.error(f"Error processing prescription {prescription_id}: {e}", exc_info=True)
         if conn:
             try:
+                # Save whatever raw text we got (may be partial) + error
                 save_prescription_upload(
                     conn, prescription_id, user_id, BUCKET_NAME, s3_key,
                     detect_file_type(s3_key), 0, sarvam_job_id, "failed",
@@ -776,7 +833,7 @@ async def trigger_processing(req: ProcessRequest, background_tasks: BackgroundTa
     if not row:
         raise HTTPException(status_code=404, detail="Prescription not found")
 
-    if row["ocr_status"] not in ("pending", "failed"):
+    if row["ocr_status"] == "completed":
         return ProcessResponse(
             prescription_id=req.prescription_id,
             status=row["ocr_status"],

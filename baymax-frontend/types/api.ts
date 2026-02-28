@@ -34,6 +34,17 @@ export interface Language {
 
 // ─── Chat ───────────────────────────────────────────────────
 
+export interface OrderItem {
+    drug_name: string;
+    brand_name: string;
+    stock_qty: number;
+    price_per_unit: number;
+    unit: string;
+    strength: string;
+    is_otc: boolean;
+    category: string;
+}
+
 export interface ChatResponse {
     reply: string;
     session_id: string;
@@ -46,6 +57,7 @@ export interface ChatResponse {
     channel: string;
     dfe_triggered: boolean;
     web_search_used: boolean;
+    order_items?: OrderItem[] | null;
 }
 
 export interface VoiceResponse {
@@ -167,6 +179,42 @@ export interface Order {
     total_price: number;
     status: string;
     ordered_at: string;
+    unit_price?: number;
+}
+
+export interface Reminder {
+    id: string;
+    order_id?: string;
+    drug_name: string;
+    dose?: string;
+    meal_instruction?: string;
+    remind_times: string[];
+    start_date?: string;
+    end_date?: string;
+    is_active: boolean;
+    total_qty?: number;
+    qty_remaining?: number;
+}
+
+export interface MedicineCourse {
+    id: string;
+    user_id: string;
+    reminder_id?: string;
+    order_id?: string;
+    drug_name: string;
+    dose?: string;
+    frequency: number;
+    times: string[];
+    meal_instruction?: string;
+    duration_days?: number;
+    start_date?: string;
+    end_date?: string;
+    total_qty?: number;
+    qty_remaining?: number;
+    doses_taken: number;
+    doses_skipped: number;
+    status: 'active' | 'completed' | 'paused' | 'cancelled';
+    created_at?: string;
 }
 
 export interface HealthEvent {
@@ -198,8 +246,69 @@ export interface FullHistory {
     user: UserProfile;
     active_medications: ActiveMedication[];
     orders: Order[];
+    reminders: Reminder[];
+    medicine_courses: MedicineCourse[];
     health_timeline: HealthEvent[];
     adherence_scores: AdherenceScore[];
     adverse_reactions: AdverseReaction[];
     generated_at: string;
+}
+
+// ─── Prescriptions ─────────────────────────────────────────
+
+export interface PrescriptionSummary {
+    id: string;
+    s3_key: string;
+    file_type: string;
+    ocr_status: string;
+    error_message?: string | null;
+    processed_at?: string | null;
+    created_at: string;
+    drugs_found: number;
+    observations_found: number;
+}
+
+export interface PrescriptionDrug {
+    drug_name_raw: string;
+    drug_name_matched?: string | null;
+    match_score?: number | null;
+    brand_name?: string | null;
+    dosage?: string | null;
+    frequency?: string | null;
+    frequency_raw?: string | null;
+    morning_dose?: string | null;
+    afternoon_dose?: string | null;
+    night_dose?: string | null;
+    duration?: string | null;
+    duration_days?: number | null;
+    instructions?: string | null;
+    meal_relation?: string | null;
+}
+
+export interface PrescriptionObservation {
+    observation_type: string;
+    observation_text: string;
+    body_part?: string | null;
+    severity?: string | null;
+}
+
+export interface PrescriptionDetail {
+    id: string;
+    user_id: string;
+    s3_key: string;
+    file_type: string;
+    ocr_status: string;
+    sarvam_job_id?: string | null;
+    raw_extracted_text?: string | null;
+    error_message?: string | null;
+    processed_at?: string | null;
+    created_at: string;
+    drugs: PrescriptionDrug[];
+    observations: PrescriptionObservation[];
+}
+
+export interface UserPrescriptionsResponse {
+    user_id: string;
+    count: number;
+    prescriptions: PrescriptionSummary[];
 }
