@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import Image from "next/image";
 import { motion } from "framer-motion";
 import { useAuth } from "@/hooks/useAuth";
 import { ArrowRight, Loader2, ShieldCheck } from "lucide-react";
@@ -62,7 +63,7 @@ export default function SignupPage() {
                 className="hidden lg:flex lg:w-1/3 flex-col justify-between p-12 z-10"
             >
                 <Link href="/" className="flex items-center gap-3 w-fit">
-                    <div className="w-10 h-10 rounded-xl bg-slate-900 flex items-center justify-center text-white text-[10px] font-black">BX</div>
+                    <Image src="/baymax-logo.png" alt="Baymax" width={112} height={112} className="w-28 h-28 object-contain" />
                     <span className="font-bold tracking-tight text-xl text-slate-900">Baymax <span className="text-emerald-600">Assistant</span></span>
                 </Link>
                 <div>
@@ -86,7 +87,7 @@ export default function SignupPage() {
                 <div className="w-full max-w-[540px] my-auto">
                     <div className="mb-10 block lg:hidden">
                         <Link href="/" className="flex items-center gap-3 w-fit">
-                            <div className="w-10 h-10 rounded-xl bg-slate-900 flex items-center justify-center text-white text-[10px] font-black">BX</div>
+                            <Image src="/baymax-logo.png" alt="Baymax" width={40} height={40} className="w-10 h-10 object-contain" />
                             <span className="font-bold tracking-tight text-xl text-slate-900">Baymax</span>
                         </Link>
                     </div>

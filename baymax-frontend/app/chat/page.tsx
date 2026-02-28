@@ -2,6 +2,8 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
+import Link from "next/link";
 import { useAuth } from "@/hooks/useAuth";
 import { dataService } from "@/lib/api";
 import { useToast } from "@/hooks/useToast";
@@ -9,9 +11,9 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-    Send, Mic, Square, Loader2, ArrowLeft,
-    Globe, Stethoscope, ChevronDown, CheckCircle2,
-    MessageSquare, AlertTriangle, User as UserIcon
+    Send, Mic, Square, Loader2, ArrowLeft, Search,
+    Globe, Stethoscope, CheckCircle2,
+    AlertTriangle, User as UserIcon, ArrowUp
 } from "lucide-react";
 
 interface ToolUsage {
@@ -49,6 +51,9 @@ export default function ChatPage() {
     const timerRef = useRef<NodeJS.Timeout | null>(null);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const inputRef = useRef<HTMLTextAreaElement>(null);
+
+    const hasMessages = messages.length > 0 || isThinking;
 
     // Scroll to bottom
     const scrollToBottom = () => {
@@ -198,17 +203,137 @@ export default function ChatPage() {
         }
     };
 
-    // --- Render ---
     const formatTime = (secs: number) => {
         const m = Math.floor(secs / 60);
         const s = secs % 60;
         return `${m}:${s < 10 ? '0' : ''}${s}`;
     };
 
+    /* ════════════════════════════════════════════════
+       EMPTY STATE — Dia-inspired hero
+       ════════════════════════════════════════════════ */
+    if (!hasMessages) {
+        return (
+            <div className="flex flex-col h-screen relative overflow-hidden">
+                {/* Soft gradient backdrop */}
+                <div className="absolute inset-0 -z-10">
+                    <div className="absolute inset-0 bg-gradient-to-b from-emerald-50/80 via-teal-50/40 to-white" />
+                    <div className="absolute top-[-20%] left-[10%] w-[60%] h-[50%] bg-emerald-100/50 rounded-full blur-[140px]" />
+                    <div className="absolute top-[-10%] right-[-5%] w-[40%] h-[40%] bg-teal-100/40 rounded-full blur-[120px]" />
+                    <div className="absolute bottom-[10%] left-[30%] w-[50%] h-[30%] bg-emerald-50/30 rounded-full blur-[100px]" />
+                </div>
+
+                {/* Logo */}
+                <motion.div
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.5 }}
+                    className="flex items-center justify-center pt-16 md:pt-24"
+                >
+                    <Link href="/dashboard">
+                        <Image src="/baymax-logo.png" alt="Baymax" width={132} height={132} className="w-[132px] h-[132px] object-contain cursor-pointer" />
+                    </Link>
+                </motion.div>
+
+                {/* Hero heading */}
+                <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.6, delay: 0.1 }}
+                    className="flex-1 flex flex-col items-center justify-center px-6 -mt-10"
+                >
+                    <h1
+                        className="text-[37px] sm:text-[47px] md:text-[67px] lg:text-[83px] text-slate-900 text-center leading-[0.95] tracking-tight mb-12 md:mb-16"
+                        style={{ fontFamily: "var(--font-gilroy)", fontWeight: 600 }}
+                    >
+                        Chat with<br />Baymax
+                    </h1>
+
+                    {/* Input bar */}
+                    <div className="w-full max-w-xl mx-auto">
+                        <form
+                            onSubmit={handleSendText}
+                            className="bg-white border border-slate-200/80 shadow-[0_4px_24px_rgb(0,0,0,0.06)] rounded-2xl p-1.5 flex items-center gap-1 focus-within:border-emerald-300 focus-within:shadow-[0_4px_24px_rgb(5,150,105,0.1)] transition-all"
+                        >
+                            <div className="flex items-center gap-2 pl-4 text-slate-400">
+                                <Search size={18} strokeWidth={2} />
+                            </div>
+
+                            <input
+                                ref={inputRef as any}
+                                type="text"
+                                value={input}
+                                onChange={(e) => setInput(e.target.value)}
+                                placeholder="Hey Baymax..."
+                                className="flex-1 bg-transparent outline-none py-3.5 px-2 text-[15px] font-medium text-slate-900 placeholder:text-slate-400"
+                                style={{ fontFamily: "var(--font-poppins)", fontWeight: 400 }}
+                            />
+
+                            <div className="flex items-center gap-1 pr-1">
+                                <button
+                                    type="button"
+                                    onClick={startRecording}
+                                    className="w-10 h-10 rounded-xl flex items-center justify-center text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors"
+                                    title="Voice input"
+                                >
+                                    <Mic size={18} />
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={!input.trim()}
+                                    className="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center hover:bg-emerald-700 transition-all disabled:opacity-30 disabled:bg-slate-300"
+                                >
+                                    <ArrowUp size={18} strokeWidth={2.5} />
+                                </button>
+                            </div>
+                        </form>
+
+                        <p
+                            className="text-center mt-5 text-[11px] text-slate-400"
+                            style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}
+                        >
+                            Baymax can make mistakes. Check important clinical information.
+                        </p>
+                    </div>
+                </motion.div>
+
+                {/* Back to dashboard */}
+                <div className="absolute top-6 left-6">
+                    <button
+                        onClick={() => router.push('/dashboard')}
+                        className="w-10 h-10 rounded-full hover:bg-white/60 flex items-center justify-center text-slate-500 transition-colors backdrop-blur-sm"
+                    >
+                        <ArrowLeft size={20} />
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    /* ════════════════════════════════════════════════
+       ACTIVE CHAT STATE — Messages view
+       ════════════════════════════════════════════════ */
     return (
-        <div className="flex flex-col h-screen bg-[#fafbfc] text-slate-900 font-sans">
+        <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.5, ease: "easeOut" }}
+            className="flex flex-col h-screen text-slate-900 font-sans relative overflow-hidden"
+        >
+            {/* Same gradient background as empty state */}
+            <div className="absolute inset-0 -z-10">
+                <div className="absolute inset-0 bg-gradient-to-b from-emerald-50/80 via-teal-50/40 to-white" />
+                <div className="absolute top-[-20%] left-[10%] w-[60%] h-[50%] bg-emerald-100/50 rounded-full blur-[140px]" />
+                <div className="absolute top-[-10%] right-[-5%] w-[40%] h-[40%] bg-teal-100/40 rounded-full blur-[120px]" />
+                <div className="absolute bottom-[10%] left-[30%] w-[50%] h-[30%] bg-emerald-50/30 rounded-full blur-[100px]" />
+            </div>
+
             {/* Header */}
-            <header className="flex-shrink-0 h-16 border-b border-slate-200 bg-white/80 backdrop-blur-md sticky top-0 z-20 flex items-center justify-between px-4 md:px-8">
+            <motion.header
+                initial={{ y: -20, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                transition={{ duration: 0.4, delay: 0.1 }}
+                className="flex-shrink-0 h-16 border-b border-slate-200/60 bg-white/70 backdrop-blur-xl sticky top-0 z-20 flex items-center justify-between px-4 md:px-8">
                 <div className="flex items-center gap-4">
                     <button
                         onClick={() => router.push('/dashboard')}
@@ -216,85 +341,90 @@ export default function ChatPage() {
                     >
                         <ArrowLeft size={20} />
                     </button>
-                    <div>
-                        <h1 className="text-lg font-bold text-slate-900 tracking-tight flex items-center gap-2">
-                            Clinical AI Assistant
-                            <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-black uppercase tracking-widest">
-                                Baymax V6
-                            </span>
-                        </h1>
-                        <p className="text-xs font-semibold text-slate-500">Secure, encrypted, multi-lingual chat.</p>
+                    <div className="flex items-center gap-3">
+                        <Image src="/baymax-logo.png" alt="Baymax" width={36} height={36} className="w-9 h-9 object-contain" />
+                        <div>
+                            <h1
+                                className="text-lg text-slate-900 tracking-tight flex items-center gap-2"
+                                style={{ fontFamily: "var(--font-gilroy)", fontWeight: 900 }}
+                            >
+                                Baymax
+                                <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-black uppercase tracking-widest">
+                                    V6
+                                </span>
+                            </h1>
+                            <p
+                                className="text-xs text-slate-500"
+                                style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}
+                            >
+                                Secure, encrypted, multi-lingual chat
+                            </p>
+                        </div>
                     </div>
                 </div>
-            </header>
+            </motion.header>
 
             {/* Chat Area */}
-            <main className="flex-1 overflow-y-auto w-full max-w-4xl mx-auto p-4 md:p-8 space-y-8 scrollbar-hide pb-56">
-                {messages.length === 0 && !isThinking ? (
-                    <div className="h-full flex flex-col items-center justify-center text-center opacity-60">
-                        <MessageSquare size={48} className="text-emerald-500 mb-4 opacity-50" />
-                        <h2 className="text-2xl font-bold text-slate-700">How can I help you today?</h2>
-                        <p className="text-slate-500 mt-2 max-w-sm">
-                            Ask about your medications, describe your symptoms, or upload a prescription. I'll automatically respond in your preferred language.
-                        </p>
-                    </div>
-                ) : (
-                    messages.map((msg) => (
-                        <div key={msg.id} className={`flex w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                            <div className={`flex max-w-[85%] gap-4 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
+            <motion.main
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5, delay: 0.2 }}
+                className="flex-1 overflow-y-auto w-full max-w-4xl mx-auto p-4 md:p-8 space-y-8 scrollbar-hide pb-56">
+                {messages.map((msg) => (
+                    <div key={msg.id} className={`flex w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`flex max-w-[85%] gap-4 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
 
-                                {/* Avatar */}
-                                <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center shadow-sm ${msg.role === 'user' ? 'bg-slate-900 text-white' : 'bg-emerald-100 text-emerald-600 border border-emerald-200'
-                                    }`}>
-                                    {msg.role === 'user' ? <UserIcon size={16} /> : <Stethoscope size={18} />}
-                                </div>
+                            {/* Avatar */}
+                            <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center shadow-sm ${msg.role === 'user' ? 'bg-slate-900 text-white' : 'bg-emerald-100 text-emerald-600 border border-emerald-200'
+                                }`}>
+                                {msg.role === 'user' ? <UserIcon size={16} /> : <Stethoscope size={18} />}
+                            </div>
 
-                                {/* Content Bubble */}
-                                <div className="flex flex-col gap-2 w-full max-w-[calc(100%-3rem)]">
-                                    {/* User Bubble */}
-                                    {msg.role === 'user' && (
-                                        <div className="bg-slate-900 text-white px-5 py-3.5 rounded-3xl rounded-tr-sm shadow-md">
-                                            <p className="text-[15px] leading-relaxed font-medium">{msg.content}</p>
-                                            {msg.transcript && (
-                                                <div className="mt-2 pt-2 border-t border-slate-700/50">
-                                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Transcript</p>
-                                                    <p className="text-sm text-slate-300 italic">"{msg.transcript}"</p>
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
-
-                                    {/* Bot Bubble */}
-                                    {msg.role === 'bot' && (
-                                        <div className="flex flex-col gap-3">
-                                            {/* Tools Status Accordions */}
-                                            {msg.toolsUsed && msg.toolsUsed.length > 0 && (
-                                                <div className="flex flex-col gap-1.5 self-start">
-                                                    {msg.toolsUsed.map((tool, idx) => (
-                                                        <div key={idx} className="flex items-center gap-2 bg-slate-50 border border-slate-200 text-slate-600 px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm">
-                                                            {tool.type === 'web_search' && <Globe size={14} className="text-blue-500" />}
-                                                            {tool.type === 'medicine_info' && <PillIcon size={14} className="text-emerald-500" />}
-                                                            {tool.type === 'triage' && <AlertTriangle size={14} className="text-amber-500" />}
-                                                            {tool.label}
-                                                            <CheckCircle2 size={12} className="text-emerald-500 ml-1" />
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            )}
-
-                                            {/* Markdown Content */}
-                                            <div className="prose prose-sm md:prose-base prose-slate max-w-none text-slate-800 leading-relaxed marker:text-emerald-500 prose-a:text-emerald-600">
-                                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                                    {msg.content}
-                                                </ReactMarkdown>
+                            {/* Content Bubble */}
+                            <div className="flex flex-col gap-2 w-full max-w-[calc(100%-3rem)]">
+                                {/* User Bubble */}
+                                {msg.role === 'user' && (
+                                    <div className="bg-slate-900 text-white px-5 py-3.5 rounded-3xl rounded-tr-sm shadow-md">
+                                        <p className="text-[15px] leading-relaxed font-medium">{msg.content}</p>
+                                        {msg.transcript && (
+                                            <div className="mt-2 pt-2 border-t border-slate-700/50">
+                                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Transcript</p>
+                                                <p className="text-sm text-slate-300 italic">&quot;{msg.transcript}&quot;</p>
                                             </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {/* Bot Bubble */}
+                                {msg.role === 'bot' && (
+                                    <div className="flex flex-col gap-3">
+                                        {/* Tools Status Accordions */}
+                                        {msg.toolsUsed && msg.toolsUsed.length > 0 && (
+                                            <div className="flex flex-col gap-1.5 self-start">
+                                                {msg.toolsUsed.map((tool, idx) => (
+                                                    <div key={idx} className="flex items-center gap-2 bg-slate-50 border border-slate-200 text-slate-600 px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm">
+                                                        {tool.type === 'web_search' && <Globe size={14} className="text-blue-500" />}
+                                                        {tool.type === 'medicine_info' && <PillIcon size={14} className="text-emerald-500" />}
+                                                        {tool.type === 'triage' && <AlertTriangle size={14} className="text-amber-500" />}
+                                                        {tool.label}
+                                                        <CheckCircle2 size={12} className="text-emerald-500 ml-1" />
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+
+                                        {/* Markdown Content */}
+                                        <div className="prose prose-sm md:prose-base prose-slate max-w-none text-slate-800 leading-relaxed marker:text-emerald-500 prose-a:text-emerald-600">
+                                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                                {msg.content}
+                                            </ReactMarkdown>
                                         </div>
-                                    )}
-                                </div>
+                                    </div>
+                                )}
                             </div>
                         </div>
-                    ))
-                )}
+                    </div>
+                ))}
 
                 {/* Thinking Indicator */}
                 <AnimatePresence>
@@ -321,10 +451,10 @@ export default function ChatPage() {
                 </AnimatePresence>
 
                 <div ref={messagesEndRef} className="h-4" />
-            </main>
+            </motion.main>
 
             {/* Input Area Overlay */}
-            <div className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-[#fafbfc] via-[#fafbfc] to-transparent pt-12 pb-6 px-4 md:px-8 z-30">
+            <div className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-white/90 via-white/70 to-transparent pt-12 pb-6 px-4 md:px-8 z-30">
                 <div className="max-w-3xl mx-auto relative">
                     {isRecording ? (
                         <motion.div
@@ -349,16 +479,11 @@ export default function ChatPage() {
                     ) : (
                         <form
                             onSubmit={handleSendText}
-                            className="bg-white border border-slate-200 shadow-[0_8px_30px_rgb(0,0,0,0.06)] rounded-3xl p-2 flex items-end gap-2 focus-within:border-emerald-400 focus-within:ring-4 focus-within:ring-emerald-50 transition-all"
+                            className="bg-white border border-emerald-500 shadow-[0_8px_30px_rgb(0,0,0,0.06)] rounded-2xl p-1.5 flex items-center gap-1 transition-all"
                         >
-                            <button
-                                type="button"
-                                onClick={startRecording}
-                                disabled={isThinking}
-                                className="flex-shrink-0 w-12 h-12 rounded-2xl flex items-center justify-center text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors disabled:opacity-50"
-                            >
-                                <Mic size={22} />
-                            </button>
+                            <div className="flex items-center pl-3 text-slate-400">
+                                <Search size={18} strokeWidth={2} />
+                            </div>
 
                             <textarea
                                 value={input}
@@ -369,27 +494,41 @@ export default function ChatPage() {
                                         handleSendText();
                                     }
                                 }}
-                                placeholder="Message Clinical AI..."
+                                placeholder="Hey Baymax..."
                                 disabled={isThinking}
-                                className="flex-1 max-h-32 min-h-[48px] bg-transparent resize-none outline-none py-3.5 px-2 text-[15px] font-medium text-slate-900 placeholder:text-slate-400 disabled:opacity-50 break-words"
+                                className="flex-1 max-h-32 min-h-[44px] bg-transparent resize-none outline-none py-3 px-2 text-[15px] font-medium text-slate-900 placeholder:text-slate-400 disabled:opacity-50 break-words"
+                                style={{ fontFamily: "var(--font-poppins)", fontWeight: 400 }}
                                 rows={1}
                             />
 
-                            <button
-                                type="submit"
-                                disabled={!input.trim() || isThinking}
-                                className="flex-shrink-0 w-12 h-12 rounded-2xl bg-emerald-600 text-white flex items-center justify-center hover:bg-emerald-700 transition-all disabled:opacity-50 disabled:bg-slate-200 disabled:text-slate-400 shadow-md"
-                            >
-                                <Send size={18} className="translate-x-[-1px] translate-y-[1px]" />
-                            </button>
+                            <div className="flex items-center gap-1 pr-1">
+                                <button
+                                    type="button"
+                                    onClick={startRecording}
+                                    disabled={isThinking}
+                                    className="w-10 h-10 rounded-xl flex items-center justify-center text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors disabled:opacity-50"
+                                >
+                                    <Mic size={18} />
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={!input.trim() || isThinking}
+                                    className="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center hover:bg-emerald-700 transition-all disabled:opacity-30 disabled:bg-slate-300 disabled:text-slate-400"
+                                >
+                                    <ArrowUp size={18} strokeWidth={2.5} />
+                                </button>
+                            </div>
                         </form>
                     )}
-                    <p className="text-center mt-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                    <p
+                        className="text-center mt-3 text-[11px] text-slate-400"
+                        style={{ fontFamily: "var(--font-poppins)", fontWeight: 500 }}
+                    >
                         Baymax can make mistakes. Check important clinical information.
                     </p>
                 </div>
             </div>
-        </div>
+        </motion.div>
     );
 }
 
