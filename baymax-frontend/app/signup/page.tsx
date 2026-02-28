@@ -29,7 +29,12 @@ export default function SignupPage() {
         setError("");
 
         try {
-            const payload = { ...formData, age: formData.age ? parseInt(formData.age) : undefined };
+            // Normalize phone: strip +91/91 prefix, keep last 10 digits
+            let cleanPhone = formData.phone.replace(/[^\d]/g, '');
+            if (cleanPhone.length > 10 && cleanPhone.startsWith('91')) cleanPhone = cleanPhone.slice(2);
+            cleanPhone = cleanPhone.slice(-10);
+
+            const payload = { ...formData, phone: cleanPhone, age: formData.age ? parseInt(formData.age) : undefined };
             await signup(payload);
             router.push("/dashboard");
         } catch (err: any) {
@@ -104,7 +109,7 @@ export default function SignupPage() {
                                 </div>
                                 <div>
                                     <label className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2 block">Phone</label>
-                                    <input name="phone" value={formData.phone} onChange={handleChange} required placeholder="+919876543210" className="w-full h-12 bg-slate-50 border border-slate-200 rounded-xl px-4 text-sm font-medium text-slate-900 placeholder:text-slate-300 focus:outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition-all" />
+                                    <input name="phone" type="tel" value={formData.phone} onChange={handleChange} required placeholder="9876543210" className="w-full h-12 bg-slate-50 border border-slate-200 rounded-xl px-4 text-sm font-medium text-slate-900 placeholder:text-slate-300 focus:outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition-all" />
                                 </div>
                             </div>
 

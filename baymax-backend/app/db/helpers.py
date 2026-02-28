@@ -57,6 +57,10 @@ async def db_execute(sql: str, *args) -> str:
 
 
 async def get_user_by_phone(phone: str) -> Optional[dict]:
+    # Normalize phone to bare 10 digits for consistent lookups
+    from app.models import normalize_phone
+    phone = normalize_phone(phone)
+
     # Try cache first
     cache_key = f"cache:user:{phone}"
     cached = await _cache_get(cache_key)

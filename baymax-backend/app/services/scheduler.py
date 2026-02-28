@@ -143,7 +143,7 @@ async def _send_reminder_batch(pool, redis, phone: str, drugs: list,
                    (id, reminder_id, user_id, patient_id, drug_name, dose,
                     scheduled_at, sent_at, idempotency_key)
                    VALUES($1, $2, $3, $4, $5, $6, NOW(), NOW(), $7)
-                   ON CONFLICT (idempotency_key) DO NOTHING""",
+                   ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING""",
                 d["log_id"], d["reminder_id"],
                 d["patient_id"], d["patient_id"],
                 d["drug_name"], d["dose"], d["idem_key"])

@@ -41,8 +41,8 @@ app = FastAPI(title="Medical AI V6", version="6.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[C.ALLOWED_ORIGIN],
-    allow_methods=["POST", "GET"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.middleware("http")(rate_limiter)

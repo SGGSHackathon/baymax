@@ -107,7 +107,12 @@ export const authService = {
         return res.data;
     },
 
-    logout: () => {
+    logout: async () => {
+        try {
+            await api.post("/auth/logout");
+        } catch {
+            // Ignore errors — server may be unreachable, still clear local state
+        }
         if (typeof window !== "undefined") {
             localStorage.removeItem(TOKEN_KEY);
             localStorage.removeItem(USER_ID_KEY);
@@ -142,6 +147,11 @@ export const dataService = {
 
     getFullHistory: async (phone: string): Promise<FullHistory> => {
         const res = await withRetry(() => api.get(`/user/${encodeURIComponent(phone)}/full-history`));
+        return res.data;
+    },
+
+    getChatMessages: async (phone: string, limit = 40): Promise<Array<{ role: string; content: string; agent_used?: string; created_at: string }>> => {
+        const res = await withRetry(() => api.get(`/user/${encodeURIComponent(phone)}/chat-messages`, { params: { limit } }));
         return res.data;
     },
 
@@ -272,5 +282,35 @@ export const dataService = {
     getPrescriptionStatus: async (prescriptionId: string) => {
         const res = await api.get(`/prescriptions/status/${encodeURIComponent(prescriptionId)}`);
         return res.data;
-    }
+    },
+
+    getUserPrescriptions: async (userId: string) => {
+        const res = await withRetry(() => api.get(`/prescriptions/user/${encodeURIComponent(userId)}`));
+        return res.data;
+    },
+
+    getPrescriptionDetails: async (prescriptionId: string) => {
+        const res = await withRetry(() => api.get(`/prescriptions/status/${encodeURIComponent(prescriptionId)}`));
+        return res.data;
+    },
+
+    // ── Reminder Management ──
+    createReminder: async (data: {
+        order_id: string;
+        drug_name: string;
+        dose?: string;
+        meal_instruction?: string;
+        frequency_per_day: number;
+        remind_times: string[];
+        duration_days: number;
+        total_qty?: number;
+    }): Promise<any> => {
+        const res = await api.post("/reminders/create", data);
+        return res.data;
+    },
+
+    deleteReminder: async (reminderId: string): Promise<any> => {
+        const res = await api.delete(`/reminders/${encodeURIComponent(reminderId)}`);
+        return res.data;
+    },
 };

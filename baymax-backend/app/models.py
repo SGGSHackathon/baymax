@@ -10,6 +10,16 @@ from pydantic import BaseModel, field_validator
 from app.config import C
 
 
+def normalize_phone(raw: str) -> str:
+    """Normalize any phone format to bare 10-digit number.
+    Handles: +919876543210, 919876543210, 919876543210@c.us, 9876543210, etc.
+    """
+    digits = re.sub(r"[^\d]", "", raw)  # strip everything except digits
+    if len(digits) > 10 and digits.startswith("91"):
+        digits = digits[2:]  # strip Indian country code
+    return digits[-10:]  # always return last 10 digits as safety net
+
+
 class WhatsAppIncoming(BaseModel):
     phone: str
     message: str
@@ -27,7 +37,7 @@ class WhatsAppIncoming(BaseModel):
     @field_validator("phone")
     @classmethod
     def clean_phone(cls, v):
-        return re.sub(r"[^\d+]", "", v)[:20]
+        return normalize_phone(v)
 
 
 class ChatResponse(BaseModel):
@@ -45,6 +55,8 @@ class ChatResponse(BaseModel):
     dfe_triggered: bool = False
     web_search_used: bool = False
     web_search_source: Optional[str] = None
+    # V7 — structured order items for web UI
+    order_items: Optional[list[dict]] = None
 
 
 class AckRequest(BaseModel):

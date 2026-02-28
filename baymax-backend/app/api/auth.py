@@ -15,8 +15,10 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, field_validator
 
 from app.config import C
-from app.singletons import get_pool
+from app.singletons import get_pool, get_redis
 from app.db.helpers import update_user
+from app.db.redis_helpers import r_del
+from app.models import normalize_phone
 
 logger = logging.getLogger("medai.v6")
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -78,10 +80,10 @@ class SignupRequest(BaseModel):
     @field_validator("phone")
     @classmethod
     def clean_phone(cls, v: str) -> str:
-        v = re.sub(r"[^\d+]", "", v)[:20]
-        if len(re.sub(r"[^\d]", "", v)) < 10:
+        cleaned = normalize_phone(v)
+        if len(cleaned) < 10:
             raise ValueError("Phone number must be at least 10 digits")
-        return v
+        return cleaned
 
     @field_validator("pincode")
     @classmethod
@@ -236,8 +238,8 @@ async def login(req: LoginRequest):
                FROM users WHERE email = $1""",
             req.identifier)
     else:
-        # Clean phone digits for lookup
-        clean = re.sub(r"[^\d+]", "", req.identifier)
+        # Normalize phone for lookup (always bare 10 digits)
+        clean = normalize_phone(req.identifier)
         row = await pool.fetchrow(
             """SELECT id, email, phone, name, password_hash, onboarded,
                       preferred_language, pincode, city, country
@@ -259,6 +261,55 @@ async def login(req: LoginRequest):
 
     logger.info(f"Login: {req.identifier} → {user_id}")
     return AuthResponse(token=token, user=_user_dict(row))
+
+
+@router.post("/logout")
+async def logout(user: dict = Depends(get_current_user)):
+    """
+    Clean up all session data for the logged-in user:
+    - Delete conversations + messages (CASCADE) from Postgres
+    - Delete conversation summaries
+    - Flush per-user Redis keys (pending_action, dup_override, pending_order, etc.)
+    """
+    uid = str(user["id"])
+    phone = user["phone"]
+    pool = await get_pool()
+
+    # 1. Delete conversation messages + conversations (CASCADE handles messages)
+    deleted_convs = await pool.execute(
+        "DELETE FROM conversations WHERE user_id = $1", user["id"])
+
+    # 2. Delete conversation summaries
+    await pool.execute(
+        "DELETE FROM conversation_summaries WHERE user_id = $1", user["id"])
+
+    # 3. Clear all per-user Redis state keys
+    redis_keys = [
+        f"pending_action:{phone}",
+        f"dup_override:{phone}",
+        f"pending_order:{phone}",
+        f"pending_question:{phone}",
+        f"family_step:{phone}",
+    ]
+    for key in redis_keys:
+        await r_del(key)
+
+    # 4. Scan and delete any other Redis keys matching this phone
+    rd = await get_redis()
+    if rd:
+        try:
+            cursor = 0
+            while True:
+                cursor, keys = await rd.scan(cursor, match=f"*{phone}*", count=100)
+                if keys:
+                    await rd.delete(*keys)
+                if cursor == 0:
+                    break
+        except Exception as e:
+            logger.warning(f"Redis scan cleanup for {phone}: {e}")
+
+    logger.info(f"Logout: {phone} ({uid}) — sessions and Redis state cleared")
+    return {"message": "Logged out and session data cleared"}
 
 
 @router.get("/me")

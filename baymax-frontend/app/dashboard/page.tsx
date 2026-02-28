@@ -80,8 +80,8 @@ function DashboardContent() {
     const router = useRouter();
     const { user: profile, logout } = useAuth();
 
-    const handleLogout = () => {
-        logout();
+    const handleLogout = async () => {
+        await logout();
         router.push("/");
     };
 

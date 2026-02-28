@@ -3026,8 +3026,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Medical AI V5", version="5.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware,
     allow_origins=[C.ALLOWED_ORIGIN],
-    allow_methods=["POST", "GET"],
-    allow_headers=["Content-Type", "Authorization"])
+    allow_methods=["*"],
+    allow_headers=["*"])
 
 
 @app.middleware("http")
@@ -3472,7 +3472,7 @@ async def adherence_report(phone: str):
         """SELECT drug_name, score, risk_flag, week_start, total_taken, total_skipped
            FROM adherence_scores WHERE user_id=$1 ORDER BY week_start DESC LIMIT 20""",
         str(user["id"]))
-    return {"overall": user.get("overall_adherence", 100), "records": rows}
+    return {"overall": user.get("overall_adherence"), "records": rows}
 
 @app.get("/user/{phone}/episodes")
 async def health_episodes(phone: str):
@@ -3532,9 +3532,9 @@ async def clinical_report(phone: str):
             "blood_group":         user.get("blood_group"),
             "weight_kg":           user.get("weight_kg"),
             "is_pregnant":         user.get("is_pregnant"),
-            "chronic_conditions":  user.get("chronic_conditions", []),
-            "allergies":           user.get("allergies", []),
-            "risk_tier":           user.get("risk_tier", 1),
+            "chronic_conditions":  user.get("chronic_conditions"),
+            "allergies":           user.get("allergies"),
+            "risk_tier":           user.get("risk_tier"),
             "overall_adherence":   user.get("overall_adherence"),
         },
         "active_medications":   active_meds,

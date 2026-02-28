@@ -21,7 +21,7 @@ from app.db.helpers import (
     db_fetch, db_fetchrow, db_execute, update_adherence, update_user,
     check_stock,
 )
-from app.db.redis_helpers import r_set, r_get
+from app.db.redis_helpers import r_set, r_get, r_get_json
 from app.core.retrieval import retrieve
 from app.core.safety import triage_severity, extract_drugs_from_inventory, detect_adverse_reaction
 from app.core.risk_tier import compute_risk_tier, get_tier_constraints
@@ -184,6 +184,192 @@ async def _run_graph_and_bg(phone: str, message: str, session_id: str,
     return result
 
 
+def _extract_order_items(result: dict) -> list[dict] | None:
+    """Extract structured order items from graph result for web UI."""
+    inv = result.get("selected_inv")
+    if not inv or result.get("agent_used") != "order_agent":
+        return None
+    return [{
+        "drug_name":      inv.get("drug_name", ""),
+        "brand_name":     inv.get("brand_name", ""),
+        "stock_qty":      inv.get("stock_qty", 0),
+        "price_per_unit": float(inv.get("price_per_unit", 0)),
+        "unit":           inv.get("unit", "tablet"),
+        "strength":       inv.get("strength", ""),
+        "is_otc":         inv.get("is_otc", True),
+        "category":       inv.get("category", ""),
+    }]
+
+
+def _parse_ack_status(text: str) -> str | None:
+    body = (text or "").strip().lower()
+    taken_kw = ("yes", "y", "taken", "ok", "done", "haan", "ha", "le liya", "liya", "kha liya", "li")
+    skipped_kw = ("skipped", "skip", "nahi liya", "nahi li", "bhul gaya", "missed")
+    if any(w in body for w in taken_kw):
+        return "taken"
+    if any(w in body for w in skipped_kw):
+        return "skipped"
+    return None
+
+
+async def _process_ack_log(log_id: str, response_text: str) -> dict:
+    """Apply ACK effects for a reminder log (status, qty updates, adherence, reorder nudge)."""
+    taken  = _parse_ack_status(response_text) == "taken"
+    status = "taken" if taken else "skipped"
+    pool   = await get_pool()
+
+    log = await pool.fetchrow("SELECT * FROM reminder_logs WHERE id=$1", log_id)
+    if not log:
+        raise HTTPException(404, "Log not found")
+
+    from datetime import datetime as dt_cls, timezone
+    late_ack = False
+    if log.get("scheduled_at"):
+        elapsed = (dt_cls.now(timezone.utc) - log["scheduled_at"]).total_seconds()
+        late_ack = elapsed > 3600
+
+    row = await pool.fetchrow(
+        """UPDATE reminder_logs
+           SET ack_status=$2, ack_received_at=NOW(), late_ack=$3
+           WHERE id=$1
+           RETURNING *""",
+        log_id, status, late_ack)
+
+    await r_set(f"ack:{log_id}", "done", ttl=7200)
+
+    ack_qty_remaining = None
+    ack_doses_taken = None
+    updated_rem = None
+
+    if row:
+        reminder_id = row["reminder_id"]
+        if taken:
+            updated_rem = await pool.fetchrow(
+                """UPDATE reminders SET qty_remaining=GREATEST(qty_remaining-1,0), updated_at=NOW()
+                   WHERE id=$1 RETURNING qty_remaining, drug_name, patient_id""",
+                reminder_id)
+            course_row = await pool.fetchrow(
+                """UPDATE medicine_courses SET qty_remaining=GREATEST(qty_remaining-1,0),
+                       doses_taken=doses_taken+1, updated_at=NOW()
+                   WHERE reminder_id=$1 AND status='active'
+                   RETURNING qty_remaining, doses_taken, total_qty""",
+                str(reminder_id))
+            if course_row:
+                ack_qty_remaining = course_row["qty_remaining"]
+                ack_doses_taken = course_row["doses_taken"]
+                if course_row["qty_remaining"] <= 0:
+                    await pool.execute(
+                        "UPDATE medicine_courses SET status='completed' WHERE reminder_id=$1 AND status='active'",
+                        str(reminder_id))
+                    await pool.execute(
+                        "UPDATE reminders SET is_active=FALSE WHERE id=$1", reminder_id)
+        else:
+            updated_rem = await pool.fetchrow(
+                "SELECT qty_remaining, drug_name, patient_id FROM reminders WHERE id=$1",
+                reminder_id)
+            course_row = await pool.fetchrow(
+                """UPDATE medicine_courses SET doses_skipped=doses_skipped+1, updated_at=NOW()
+                   WHERE reminder_id=$1 AND status='active'
+                   RETURNING qty_remaining, doses_taken, total_qty""",
+                str(reminder_id))
+            if course_row:
+                ack_qty_remaining = course_row["qty_remaining"]
+                ack_doses_taken = course_row["doses_taken"]
+
+    if taken and updated_rem and updated_rem["qty_remaining"] is not None and updated_rem["qty_remaining"] <= 1:
+        drug_name = updated_rem["drug_name"]
+        patient_id = str(updated_rem["patient_id"])
+        user_row = await pool.fetchrow("SELECT phone FROM users WHERE id=$1", patient_id)
+        if user_row:
+            user_phone = user_row["phone"]
+            reorder_msg = (
+                f"⚠️ *Low Stock Alert!*\n\n"
+                f"Your *{drug_name.title()}* is about to run out "
+                f"(only *{updated_rem['qty_remaining']}* dose{'s' if updated_rem['qty_remaining'] != 1 else ''} remaining).\n\n"
+                f"Would you like to reorder? Reply with the quantity, e.g.:\n"
+                f"*reorder {drug_name} 10*\n\n"
+                f"Or reply *no* to dismiss.")
+            try:
+                await send_whatsapp(user_phone, reorder_msg)
+                await r_set(f"pending_reorder:{user_phone}",
+                            {"drug": drug_name, "reminder_id": str(row["reminder_id"]),
+                             "patient_id": patient_id}, ttl=3600)
+                inv = await check_stock(drug_name)
+                if inv:
+                    await r_set(f"pending_action:{user_phone}",
+                                {"stage": "awaiting_quantity", "drug": drug_name,
+                                 "inventory": inv}, ttl=3600)
+                logger.info(f"Reorder prompt sent for {drug_name} to {user_phone}")
+            except Exception as e:
+                logger.error(f"Failed to send reorder message: {e}")
+
+    if row:
+        await update_adherence(str(row["patient_id"]), row["drug_name"], taken)
+
+    return {
+        "status": status,
+        "log_id": log_id,
+        "late_ack": late_ack,
+        "qty_remaining": ack_qty_remaining,
+        "doses_taken": ack_doses_taken,
+        "drug_name": row["drug_name"] if row else None,
+    }
+
+
+async def _try_handle_whatsapp_ack(phone: str, message: str) -> dict | None:
+    """If message is taken/skipped and there are pending reminder logs, ACK latest batch and return reply payload."""
+    ack_status = _parse_ack_status(message)
+    if not ack_status:
+        return None
+
+    user = await get_user_by_phone(phone)
+    if not user:
+        return None
+
+    pool = await get_pool()
+    pending_rows = await pool.fetch(
+        """WITH latest_batch AS (
+               SELECT date_trunc('minute', MAX(scheduled_at)) AS batch_minute
+               FROM reminder_logs
+               WHERE patient_id=$1
+                 AND (ack_status IS NULL OR ack_status = 'pending')
+                 AND scheduled_at >= NOW() - INTERVAL '4 hours'
+           )
+           SELECT rl.id, rl.drug_name
+           FROM reminder_logs rl, latest_batch lb
+           WHERE rl.patient_id=$1
+             AND (rl.ack_status IS NULL OR rl.ack_status = 'pending')
+             AND rl.scheduled_at >= NOW() - INTERVAL '4 hours'
+             AND lb.batch_minute IS NOT NULL
+             AND date_trunc('minute', rl.scheduled_at)=lb.batch_minute
+           ORDER BY rl.scheduled_at ASC""",
+        str(user["id"]))
+
+    if not pending_rows:
+        return None
+
+    ack_results = []
+    for row in pending_rows:
+        try:
+            ack_results.append(await _process_ack_log(str(row["id"]), ack_status))
+        except Exception as e:
+            logger.error(f"ACK fallback processing failed for log {row['id']}: {e}")
+
+    if not ack_results:
+        return None
+
+    emoji = "✅" if ack_status == "taken" else "❌"
+    drug_list = ", ".join(f"*{str(r.get('drug_name', '')).title()}*" for r in ack_results if r.get("drug_name"))
+    last = ack_results[-1]
+    reply = f"{emoji} *{ack_status.upper()}* logged"
+    if drug_list:
+        reply += f" for {drug_list}"
+    if last.get("qty_remaining") is not None:
+        qty = last["qty_remaining"]
+        reply += f"\n💊 *{qty}* dose{'s' if qty != 1 else ''} remaining"
+    return {"reply": reply, "agent_used": "reminder_ack"}
+
+
 # ── Health ─────────────────────────────────────────────────────
 @router.get("/health")
 async def health():
@@ -197,6 +383,18 @@ async def health():
 async def whatsapp(req: WhatsAppIncoming, bg: BackgroundTasks):
     phone      = req.phone
     session_id = req.session_id or f"wa_{hashlib.md5(phone.encode()).hexdigest()[:12]}"
+
+    # Priority path: reply taken/skipped should first ACK latest pending reminder batch.
+    ack_payload = await _try_handle_whatsapp_ack(phone, req.message)
+    if ack_payload:
+        return ChatResponse(
+            reply=ack_payload["reply"],
+            reply_english=ack_payload["reply"],
+            session_id=session_id,
+            agent_used=ack_payload["agent_used"],
+            channel="whatsapp",
+        )
+
     result     = await _run_graph_and_bg(phone, req.message, session_id, "whatsapp", bg)
     return ChatResponse(
         reply            = result["reply"],
@@ -212,6 +410,7 @@ async def whatsapp(req: WhatsAppIncoming, bg: BackgroundTasks):
         dfe_triggered    = result.get("dfe_triggered", False),
         web_search_used  = result.get("web_search_used", False),
         web_search_source = result.get("web_search_source"),
+        order_items      = _extract_order_items(result),
     )
 
 
@@ -235,6 +434,7 @@ async def sms_chat(req: WhatsAppIncoming, bg: BackgroundTasks):
         dfe_triggered    = result.get("dfe_triggered", False),
         web_search_used  = result.get("web_search_used", False),
         web_search_source = result.get("web_search_source"),
+        order_items      = _extract_order_items(result),
     )
 
 
@@ -258,6 +458,7 @@ async def web_chat(req: WhatsAppIncoming, bg: BackgroundTasks):
         dfe_triggered    = result.get("dfe_triggered", False),
         web_search_used  = result.get("web_search_used", False),
         web_search_source = result.get("web_search_source"),
+        order_items      = _extract_order_items(result),
     )
 
 
@@ -402,24 +603,59 @@ async def stream_chat(req: WhatsAppIncoming, bg: BackgroundTasks):
                 yield f"data: {json.dumps({'type':'token','text':msg,'done':True})}\n\n"
                 return
 
+            # ── Order / action-flow detection ──────────────────────
+            # If there's a pending order action OR drugs found in inventory,
+            # route through the full graph so order_agent handles it properly.
+            pending = await r_get_json(f"pending_action:{phone}")
+            if drugs or pending:
+                logger.info(f"Stream: routing through graph (drugs={drugs}, pending={bool(pending)})")
+                result = await _run_graph_and_bg(phone, req.message, session_id, "web", bg)
+                reply = result.get("reply", "")
+                order_items = _extract_order_items(result)
+                # Collect sources from rag_context on the result
+                graph_sources: list[str] = []
+                for r in (result.get("rag_context") or []):
+                    src = r.get("source", "")
+                    if src and src not in ("", "external") and src not in graph_sources:
+                        graph_sources.append(src)
+                web_src = result.get("web_search_source")
+                if web_src and web_src not in graph_sources:
+                    graph_sources.insert(0, web_src)
+                yield f"data: {json.dumps({'type': 'graph_result', 'text': reply, 'done': True, 'session_id': session_id, 'agent_used': result.get('agent_used', ''), 'requires_action': result.get('requires_action'), 'order_items': order_items, 'emergency': result.get('emergency', False), 'safety_flags': result.get('safety_flags', []), 'sources': graph_sources[:4], 'web_search_used': result.get('web_search_used', False)})}\n\n"
+                return
+
             hist_txt = "\n".join(
                 f"{'User' if h['role']=='user' else 'Bot'}: {h['content'][:150]}"
                 for h in history[-4:])
             rag  = await retrieve(req.message, C.NS_GENERAL, top_k=5)
             ctx  = "\n\n".join(r["text"] for r in rag[:2]) if rag else ""
+
+            # Extract sources from RAG results for frontend display
+            stream_sources: list[str] = []
+            for r in (rag or []):
+                src = r.get("source", "")
+                if src and src not in ("", "external") and src not in stream_sources:
+                    stream_sources.append(src)
+
             prompt = (
-                "You are a warm, accurate medical information assistant.\n"
-                "Use **Markdown** formatting for web display.\n"
-                f"Patient: Age={user.get('age','?')} | Risk Tier={tier}\n"
+                f"Patient context: Age={user.get('age','?')} | Risk Tier={tier}\n"
                 f"{'Memory: ' + summary[:200] if summary else ''}\n\n"
-                f"Knowledge:\n{ctx}\n\nChat:\n{hist_txt}\n\nQuestion: {req.message}\n\nAnswer:")
+                f"Relevant knowledge:\n{ctx}\n\nRecent chat:\n{hist_txt}\n\nUser: {req.message}\n\nBAYMAX:")
 
             from langchain_groq import ChatGroq
             streaming_llm = ChatGroq(api_key=C.GROQ_API_KEY, model=C.LLM_MODEL,
-                                     temperature=0.1, max_tokens=1200, streaming=True)
+                                     temperature=0.1, max_tokens=2048, streaming=True)
             full_reply = ""
             async for chunk in streaming_llm.astream([
-                SystemMessage(content="You are a helpful medical information assistant."),
+                SystemMessage(content=(
+                    "You are BAYMAX, an AI pharmacist and medical assistant.\n"
+                    "Rules:\n"
+                    "- Your name is BAYMAX. If asked who you are, say: I am BAYMAX, your AI pharma assistant.\n"
+                    "- For simple greetings or generic questions, respond briefly (1-3 sentences max).\n"
+                    "- For medical/pharmacy questions, be thorough and use Markdown formatting.\n"
+                    "- Never break off mid-sentence. Always complete your response fully.\n"
+                    "- Be warm, concise, and accurate."
+                )),
                 HumanMessage(content=prompt)
             ]):
                 token = chunk.content or ""
@@ -427,7 +663,7 @@ async def stream_chat(req: WhatsAppIncoming, bg: BackgroundTasks):
                     full_reply += token
                     yield f"data: {json.dumps({'type':'token','text':token,'done':False})}\n\n"
 
-            yield f"data: {json.dumps({'type':'token','text':'','done':True,'session_id':session_id})}\n\n"
+            yield f"data: {json.dumps({'type':'token','text':'','done':True,'session_id':session_id,'sources':stream_sources[:4]})}\n\n"
 
             uid = str(user.get("id", ""))
             if uid:
@@ -452,6 +688,28 @@ async def stream_chat(req: WhatsAppIncoming, bg: BackgroundTasks):
         event_generator(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# ── Chat Message History ─────────────────────────────────────
+@router.get("/user/{phone}/chat-messages")
+async def get_chat_messages(phone: str, limit: int = 40):
+    """Return the last N conversation messages for a phone number, newest-first."""
+    user = await get_user_by_phone(phone)
+    if not user:
+        raise HTTPException(404, "User not found")
+    uid = str(user["id"])
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """SELECT role, content, agent_used, created_at
+           FROM conversation_messages
+           WHERE user_id = $1
+           ORDER BY created_at DESC
+           LIMIT $2""",
+        uid, limit
+    )
+    # Return oldest-first so the frontend can render in order
+    return [{"role": r["role"], "content": r["content"],
+             "agent_used": r["agent_used"], "created_at": str(r["created_at"])} for r in reversed(rows)]
 
 
 # ── Drug Recall Check ─────────────────────────────────────────
@@ -522,43 +780,80 @@ async def ack_reminder(req: AckRequest):
     # Mark ACK in Redis (for any async checks)
     await r_set(f"ack:{req.log_id}", "done", ttl=7200)
 
-    # Decrement qty_remaining if taken
-    if taken and row:
-        updated_rem = await pool.fetchrow(
-            """UPDATE reminders SET qty_remaining=GREATEST(qty_remaining-1,0), updated_at=NOW()
-               WHERE id=$1 RETURNING qty_remaining, drug_name, patient_id""",
-            row["reminder_id"])
+    # Track qty_remaining for the response
+    ack_qty_remaining = None
+    ack_doses_taken = None
+    updated_rem = None
 
-        # Check if quantity is running low (<=1) → send reorder message via WhatsApp
-        if updated_rem and updated_rem["qty_remaining"] is not None and updated_rem["qty_remaining"] <= 1:
-            drug_name = updated_rem["drug_name"]
-            patient_id = str(updated_rem["patient_id"])
-            # Get user phone
-            user_row = await pool.fetchrow("SELECT phone FROM users WHERE id=$1", patient_id)
-            if user_row:
-                user_phone = user_row["phone"]
-                reorder_msg = (
-                    f"⚠️ *Low Stock Alert!*\n\n"
-                    f"Your *{drug_name.title()}* is about to run out "
-                    f"(only *{updated_rem['qty_remaining']}* dose{'s' if updated_rem['qty_remaining'] != 1 else ''} remaining).\n\n"
-                    f"Would you like to reorder? Reply with the quantity, e.g.:\n"
-                    f"*reorder {drug_name} 10*\n\n"
-                    f"Or reply *no* to dismiss.")
-                try:
-                    await send_whatsapp(user_phone, reorder_msg)
-                    # Set a pending reorder flag so the system knows this is a reorder
-                    await r_set(f"pending_reorder:{user_phone}",
-                                {"drug": drug_name, "reminder_id": str(row["reminder_id"]),
-                                 "patient_id": patient_id}, ttl=3600)
-                    # Also set pending_action so order_agent handles the reply quantity
-                    inv = await check_stock(drug_name)
-                    if inv:
-                        await r_set(f"pending_action:{user_phone}",
-                                    {"stage": "awaiting_quantity", "drug": drug_name,
-                                     "inventory": inv}, ttl=3600)
-                    logger.info(f"Reorder prompt sent for {drug_name} to {user_phone}")
-                except Exception as e:
-                    logger.error(f"Failed to send reorder message: {e}")
+    # Decrement qty_remaining if taken, track skipped too
+    if row:
+        reminder_id = row["reminder_id"]
+        if taken:
+            updated_rem = await pool.fetchrow(
+                """UPDATE reminders SET qty_remaining=GREATEST(qty_remaining-1,0), updated_at=NOW()
+                   WHERE id=$1 RETURNING qty_remaining, drug_name, patient_id""",
+                reminder_id)
+            # Update medicine_course: decrement qty_remaining, increment doses_taken
+            course_row = await pool.fetchrow(
+                """UPDATE medicine_courses SET qty_remaining=GREATEST(qty_remaining-1,0),
+                       doses_taken=doses_taken+1, updated_at=NOW()
+                   WHERE reminder_id=$1 AND status='active'
+                   RETURNING qty_remaining, doses_taken, total_qty""",
+                str(reminder_id))
+            if course_row:
+                ack_qty_remaining = course_row["qty_remaining"]
+                ack_doses_taken = course_row["doses_taken"]
+                # Auto-complete course if qty exhausted or end_date passed
+                if course_row["qty_remaining"] <= 0:
+                    await pool.execute(
+                        "UPDATE medicine_courses SET status='completed' WHERE reminder_id=$1 AND status='active'",
+                        str(reminder_id))
+                    await pool.execute(
+                        "UPDATE reminders SET is_active=FALSE WHERE id=$1", reminder_id)
+        else:
+            updated_rem = await pool.fetchrow(
+                "SELECT qty_remaining, drug_name, patient_id FROM reminders WHERE id=$1",
+                reminder_id)
+            # Update medicine_course: increment doses_skipped
+            course_row = await pool.fetchrow(
+                """UPDATE medicine_courses SET doses_skipped=doses_skipped+1, updated_at=NOW()
+                   WHERE reminder_id=$1 AND status='active'
+                   RETURNING qty_remaining, doses_taken, total_qty""",
+                str(reminder_id))
+            if course_row:
+                ack_qty_remaining = course_row["qty_remaining"]
+                ack_doses_taken = course_row["doses_taken"]
+
+    # Check if quantity is running low (<=1) → send reorder message via WhatsApp (only on taken)
+    if taken and updated_rem and updated_rem["qty_remaining"] is not None and updated_rem["qty_remaining"] <= 1:
+        drug_name = updated_rem["drug_name"]
+        patient_id = str(updated_rem["patient_id"])
+        # Get user phone
+        user_row = await pool.fetchrow("SELECT phone FROM users WHERE id=$1", patient_id)
+        if user_row:
+            user_phone = user_row["phone"]
+            reorder_msg = (
+                f"⚠️ *Low Stock Alert!*\n\n"
+                f"Your *{drug_name.title()}* is about to run out "
+                f"(only *{updated_rem['qty_remaining']}* dose{'s' if updated_rem['qty_remaining'] != 1 else ''} remaining).\n\n"
+                f"Would you like to reorder? Reply with the quantity, e.g.:\n"
+                f"*reorder {drug_name} 10*\n\n"
+                f"Or reply *no* to dismiss.")
+            try:
+                await send_whatsapp(user_phone, reorder_msg)
+                # Set a pending reorder flag so the system knows this is a reorder
+                await r_set(f"pending_reorder:{user_phone}",
+                            {"drug": drug_name, "reminder_id": str(row["reminder_id"]),
+                             "patient_id": patient_id}, ttl=3600)
+                # Also set pending_action so order_agent handles the reply quantity
+                inv = await check_stock(drug_name)
+                if inv:
+                    await r_set(f"pending_action:{user_phone}",
+                                {"stage": "awaiting_quantity", "drug": drug_name,
+                                 "inventory": inv}, ttl=3600)
+                logger.info(f"Reorder prompt sent for {drug_name} to {user_phone}")
+            except Exception as e:
+                logger.error(f"Failed to send reorder message: {e}")
 
     # Update adherence score
     if row:
@@ -568,6 +863,8 @@ async def ack_reminder(req: AckRequest):
         "status": status,
         "log_id": req.log_id,
         "late_ack": late_ack,
+        "qty_remaining": ack_qty_remaining,
+        "doses_taken": ack_doses_taken,
     }
 
 
@@ -723,7 +1020,7 @@ async def adherence_report(phone: str):
         """SELECT drug_name, score, risk_flag, week_start, total_taken, total_skipped
            FROM adherence_scores WHERE user_id=$1 ORDER BY week_start DESC LIMIT 20""",
         str(user["id"]))
-    return {"overall": user.get("overall_adherence", 100), "records": rows}
+    return {"overall": user.get("overall_adherence"), "records": rows}
 
 @router.get("/user/{phone}/episodes")
 async def health_episodes(phone: str):
@@ -779,9 +1076,9 @@ async def clinical_report(phone: str):
             "blood_group":         user.get("blood_group"),
             "weight_kg":           user.get("weight_kg"),
             "is_pregnant":         user.get("is_pregnant"),
-            "chronic_conditions":  user.get("chronic_conditions", []),
-            "allergies":           user.get("allergies", []),
-            "risk_tier":           user.get("risk_tier", 1),
+            "chronic_conditions":  user.get("chronic_conditions"),
+            "allergies":           user.get("allergies"),
+            "risk_tier":           user.get("risk_tier"),
             "overall_adherence":   user.get("overall_adherence"),
         },
         "active_medications":   active_meds,
@@ -823,6 +1120,16 @@ async def full_profile_history(phone: str):
     reactions = await db_fetch(
         "SELECT * FROM adverse_reactions WHERE user_id=$1 ORDER BY reported_at DESC",
         uid)
+
+    # 6. Active Reminders
+    reminders = await db_fetch(
+        "SELECT * FROM reminders WHERE patient_id=$1 AND is_active=TRUE ORDER BY start_date DESC",
+        uid)
+
+    # 7. Medicine Courses
+    medicine_courses = await db_fetch(
+        "SELECT * FROM medicine_courses WHERE user_id=$1 ORDER BY created_at DESC",
+        uid)
     
     # Calculate approximate BMI if weight and height are present
     bmi = None
@@ -839,6 +1146,8 @@ async def full_profile_history(phone: str):
         "user": user_dict,
         "active_medications": active_meds,
         "orders": orders,
+        "reminders": reminders,
+        "medicine_courses": medicine_courses,
         "health_timeline": events,
         "adherence_scores": adherence,
         "adverse_reactions": reactions,
@@ -847,6 +1156,130 @@ async def full_profile_history(phone: str):
 
 
 # ── Inventory Endpoints ───────────────────────────────────────
+
+
+# ── Reminder Management from Orders ───────────────────────────
+from pydantic import BaseModel as _BaseModel
+from typing import Optional as _Optional, List as _List
+
+class _ReminderCreateRequest(_BaseModel):
+    order_id: str
+    drug_name: str
+    dose: str = "1 tablet"
+    meal_instruction: str = "after_meal"
+    frequency_per_day: int           # e.g. 1, 2, 3
+    remind_times: list[str]          # e.g. ["08:00", "20:00"]
+    duration_days: int               # how many days
+    total_qty: _Optional[int] = None # auto-calc if None
+
+
+@router.post("/reminders/create")
+async def create_reminder_from_order(req: _ReminderCreateRequest):
+    """
+    Create a reminder + active_medication from an existing order.
+    Called when user enables daily intake reminder on an order.
+    """
+    pool = await get_pool()
+
+    # Validate order exists
+    order = await pool.fetchrow(
+        "SELECT id, user_id, patient_id, drug_name, quantity FROM orders WHERE id = $1",
+        req.order_id)
+    if not order:
+        raise HTTPException(404, "Order not found")
+
+    uid = str(order["user_id"])
+    patient_id = str(order["patient_id"])
+
+    # Validate remind_times count matches frequency
+    if len(req.remind_times) != req.frequency_per_day:
+        raise HTTPException(400, f"remind_times length ({len(req.remind_times)}) must match frequency_per_day ({req.frequency_per_day})")
+
+    # Validate time format
+    import re
+    for t in req.remind_times:
+        if not re.match(r'^\d{2}:\d{2}$', t):
+            raise HTTPException(400, f"Invalid time format: {t}. Use HH:MM")
+
+    from datetime import date, timedelta
+    start = date.today()
+    end = start + timedelta(days=req.duration_days)
+    total_qty = req.total_qty or (req.frequency_per_day * req.duration_days)
+
+    # Deactivate any existing reminder for same drug + patient
+    await pool.execute(
+        "UPDATE reminders SET is_active = FALSE WHERE patient_id = $1 AND drug_name = $2 AND is_active = TRUE",
+        patient_id, req.drug_name.lower())
+
+    # Create reminder
+    reminder = await pool.fetchrow(
+        """INSERT INTO reminders
+           (user_id, patient_id, order_id, drug_name, dose, meal_instruction,
+            remind_times, start_date, end_date, is_active, total_qty, qty_remaining)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE, $10, $10)
+           RETURNING *""",
+        uid, patient_id, req.order_id,
+        req.drug_name.lower(), req.dose, req.meal_instruction,
+        req.remind_times, start, end, total_qty)
+
+    # Upsert active_medication
+    await pool.execute(
+        "UPDATE active_medications SET is_active = FALSE WHERE user_id = $1 AND drug_name = $2",
+        uid, req.drug_name.lower())
+
+    freq_label = {1: "once_daily", 2: "twice_daily", 3: "thrice_daily"}.get(
+        req.frequency_per_day, f"{req.frequency_per_day}x_daily")
+
+    await pool.execute(
+        """INSERT INTO active_medications
+           (user_id, drug_name, dosage, dose_per_intake, frequency, frequency_times,
+            meal_instruction, start_date, end_date, is_active, source)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE, 'ordered')""",
+        uid, req.drug_name.lower(), req.dose, req.dose,
+        freq_label, req.remind_times,
+        req.meal_instruction, start, end)
+
+    # Create medicine_course entry
+    course = await pool.fetchrow(
+        """INSERT INTO medicine_courses
+           (user_id, reminder_id, order_id, drug_name, dose, frequency, times,
+            meal_instruction, duration_days, start_date, end_date,
+            total_qty, qty_remaining, status)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12, 'active')
+           RETURNING *""",
+        uid, str(reminder["id"]), req.order_id,
+        req.drug_name.lower(), req.dose, req.frequency_per_day, req.remind_times,
+        req.meal_instruction, req.duration_days, start, end, total_qty)
+
+    logger.info(f"Reminder + course created for {req.drug_name} from order {req.order_id} → patient {patient_id}")
+    return {"message": "Reminder created", "reminder": dict(reminder), "course": dict(course) if course else None}
+
+
+@router.delete("/reminders/{reminder_id}")
+async def delete_reminder(reminder_id: str):
+    """Disable a reminder and its linked active_medication."""
+    pool = await get_pool()
+
+    rem = await pool.fetchrow(
+        "SELECT id, patient_id, drug_name FROM reminders WHERE id = $1",
+        reminder_id)
+    if not rem:
+        raise HTTPException(404, "Reminder not found")
+
+    await pool.execute(
+        "UPDATE reminders SET is_active = FALSE WHERE id = $1", reminder_id)
+    await pool.execute(
+        "UPDATE active_medications SET is_active = FALSE WHERE user_id = $1 AND drug_name = $2",
+        str(rem["patient_id"]), rem["drug_name"])
+    # Cancel linked medicine course
+    await pool.execute(
+        "UPDATE medicine_courses SET status = 'cancelled' WHERE reminder_id = $1 AND status = 'active'",
+        reminder_id)
+
+    logger.info(f"Reminder {reminder_id} disabled for {rem['drug_name']}")
+    return {"message": "Reminder disabled"}
+
+
 @router.get("/inventory/search")
 async def inv_search(q: str = Query(..., min_length=2), limit: int = 5):
     from app.db.helpers import get_inventory_fuzzy
