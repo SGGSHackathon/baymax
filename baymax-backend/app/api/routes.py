@@ -16,6 +16,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from app.config import C
 from app.singletons import get_pinecone, get_pool
 from app.models import WhatsAppIncoming, ChatResponse, AckRequest, VitalInput
+from app.graph.routing import _is_greeting
 from app.db.helpers import (
     get_user_by_phone, create_user, get_recent_messages, get_session_summary,
     db_fetch, db_fetchrow, db_execute, update_adherence, update_user,
@@ -579,6 +580,90 @@ async def translate_endpoint(
         return {"translated_text": final, "source_language": detected, "target_language": target_lang}
 
 
+# ── Fast-path helpers (no DB / RAG / LLM needed) ─────────────────────────────
+
+import random as _random
+
+_SIMPLE_PATTERNS = [
+    # greetings
+    r"^h+[ae]+l+o+[!?.\s]*$",
+    r"^h+[ae]+y+[!?.\s]*$",
+    r"^h+i+[!?.\s]*$",
+    r"^h+[ae]+l+l+o+[!?.\s]*$",
+    r"^good\s+(morning|evening|afternoon|night)[!?.\s]*$",
+    r"^(gm|gn)[!?.\s]*$",
+    r"^(namaste|namaskar|namasthe)[!?.\s]*$",
+    # how are you variants
+    r"^how\s+(are\s+you|r\s+u|are\s+u|r\s+you)[?!.\s]*$",
+    r"^(what'?s|whats)\s+up[?!.\s]*$",
+    r"^(sup|wassup|wazzup)[?!.\s]*$",
+    r"^(yo|hey)[!?.\s]*$",
+    # who / what are you
+    r"^who\s+are\s+you[?!.\s]*$",
+    r"^what\s+are\s+you[?!.\s]*$",
+    r"^(your\s+name|name)[?!.\s]*$",
+    r"^what(?:'?s|\s+is)\s+your\s+name[?!.\s]*$",
+    r"^are\s+you\s+(a\s+bot|an?\s+ai|a\s+robot)[?!.\s]*$",
+    # thanks / bye
+    r"^th+a+n+k+s?[!?.\s]*$",
+    r"^th+a+n+k\s+you[!?.\s]*$",
+    r"^(ok|okay|ok+)[!?.\s]*$",
+    r"^(bye|goodbye|see\s+ya|cya|later)[!?.\s]*$",
+    r"^(nice|cool|great|awesome|perfect|superb)[!?.\s]*$",
+]
+
+import re as _re
+
+def _is_simple_query(msg: str) -> bool:
+    """Return True for greetings and trivially short chitchat."""
+    m = msg.strip().lower()
+    # Re-use routing.py's greeting detector
+    if _is_greeting(m):
+        return True
+    # Additional lightweight patterns
+    for p in _SIMPLE_PATTERNS:
+        if _re.match(p, m, _re.IGNORECASE):
+            return True
+    return False
+
+_GREETING_REPLIES = [
+    "Hey there! 👋 I'm BAYMAX, your AI pharmacist. How can I help you today?",
+    "Hello! I'm BAYMAX, your personal AI health assistant. What can I help you with?",
+    "Hi! 😊 BAYMAX here — ask me anything about medications, symptoms, or health queries.",
+    "Hey! Great to see you. I'm BAYMAX. What's on your mind today?",
+]
+
+_HOW_ARE_YOU_REPLIES = [
+    "I'm doing great and ready to help! 😄 What health question can I answer for you?",
+    "All systems running smoothly! What can I help you with today?",
+    "Ready and here for you! Do you have a health or medication question?",
+]
+
+_WHO_AM_I_REPLY = (
+    "I'm **BAYMAX**, your AI pharmacist and health assistant. "
+    "I can help with medication information, symptom guidance, prescription queries, and more. "
+    "What would you like to know?"
+)
+
+_THANKS_REPLY = "You're welcome! 😊 Is there anything else I can help you with?"
+_BYE_REPLY    = "Take care! 👋 Come back anytime you have a health question."
+_OK_REPLY     = "Got it! Let me know if you need anything else. 😊"
+
+def _simple_reply(msg: str) -> str:
+    m = msg.strip().lower()
+    if _re.match(r"^(bye|goodbye|see\s+ya|cya|later)", m):
+        return _BYE_REPLY
+    if _re.match(r"^th+a+n+k", m):
+        return _THANKS_REPLY
+    if _re.match(r"^(ok|okay)", m):
+        return _OK_REPLY
+    if _re.match(r"^(who|what)\s+are\s+you|what.?s\s+your\s+name|are\s+you\s+(a\s+bot|an?\s+ai)", m):
+        return _WHO_AM_I_REPLY
+    if _re.match(r"^how\s+(are|r)\s+(you|u)|what.?s\s+up|sup|wassup", m):
+        return _random.choice(_HOW_ARE_YOU_REPLIES)
+    return _random.choice(_GREETING_REPLIES)
+
+
 # ── Streaming Endpoint ────────────────────────────────────────
 @router.post("/stream")
 async def stream_chat(req: WhatsAppIncoming, bg: BackgroundTasks):
@@ -587,6 +672,13 @@ async def stream_chat(req: WhatsAppIncoming, bg: BackgroundTasks):
 
     async def event_generator():
         try:
+            # ── Fast-path: greetings & simple chitchat (no DB/RAG/LLM) ──────────
+            _msg = req.message.strip()
+            if _is_simple_query(_msg):
+                reply = _simple_reply(_msg)
+                yield "data: " + json.dumps({"type": "token", "text": reply, "done": True, "session_id": session_id, "sources": []}) + "\n\n"
+                return
+
             user     = await get_user_by_phone(phone) or await create_user(phone)
             history  = await get_recent_messages(session_id, limit=6)
             summary  = await get_session_summary(str(user.get("id", "")))
@@ -1294,21 +1386,4 @@ async def expiring():
     return await db_fetch("SELECT * FROM expiring_soon_view")
 
 
-# ── Admin Endpoints ───────────────────────────────────────────
-@router.get("/admin/abuse-risk")
-async def abuse_risk_list():
-    return await db_fetch(
-        """SELECT u.phone, u.name, ab.score, ab.flags, ab.review_required, ab.blocked
-           FROM abuse_scores ab JOIN users u ON ab.user_id=u.id
-           WHERE ab.score >= $1 OR ab.review_required=TRUE
-           ORDER BY ab.score DESC""",
-        C.ABUSE_REVIEW_SCORE)
-
-@router.get("/admin/vital-trend-alerts")
-async def vital_trend_alerts():
-    return await db_fetch("SELECT * FROM vital_trend_alerts_view")
-
-@router.get("/admin/cde-log")
-async def cde_log(limit: int = 50):
-    return await db_fetch(
-        "SELECT * FROM clinical_decision_log ORDER BY created_at DESC LIMIT $1", limit)
+# ── Admin Endpoints ── (moved to app/api/admin_router.py) ─────

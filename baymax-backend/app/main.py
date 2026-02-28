@@ -18,6 +18,7 @@ from app.api.middleware import rate_limiter
 from app.api.routes import router
 from app.api.auth import router as auth_router
 from app.api.prescription_router import router as prescription_router
+from app.api.admin_router import router as admin_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("medai.v6")
@@ -49,3 +50,4 @@ app.middleware("http")(rate_limiter)
 app.include_router(auth_router)
 app.include_router(router)
 app.include_router(prescription_router)
+app.include_router(admin_router)
