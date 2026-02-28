@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: whatsapp-service
+    repo: https://github.com/cts9505/whatsapp-api
+    branch: main
+    dockerfilePath: ./Dockerfile
+    buildFilter:
+      paths:
+        - .
+    autoDeploy: true

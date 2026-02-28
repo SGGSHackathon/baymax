@@ -1,0 +1,47 @@
+# ── Python ────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+*.egg
+
+# ── Environment / Secrets ────────────────────────────────────
+.env
+.env.*
+!.env.example
+!env.example
+
+# ── IDE ───────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Node.js ───────────────────────────────────────────────────
+node_modules/
+package-lock.json
+npm-debug.log*
+
+# ── WhatsApp session data ────────────────────────────────────
+.wwebjs_auth/
+.wwebjs_cache/
+
+# ── Docker ────────────────────────────────────────────────────
+*.log
+
+# ── Misc ──────────────────────────────────────────────────────
+*.bak
+*.tmp
+migrate_*.py
