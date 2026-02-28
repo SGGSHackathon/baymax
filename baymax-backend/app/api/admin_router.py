@@ -4,6 +4,7 @@ Prefix: /admin
 All endpoints return JSON. Pagination via ?page=1&per_page=25.
 """
 
+import asyncio
 import json
 import logging
 import math
@@ -17,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.db.helpers import db_fetch, db_fetchrow, db_execute
+from app.db.redis_helpers import r_get_json, r_set, r_del
 from app.singletons import get_pool
 
 logger = logging.getLogger("medai.admin")
@@ -399,16 +401,88 @@ async def table_schema(slug: str):
 
 
 # ══════════════════════════════════════════════════════════════
+# Admin cache helpers
+# ══════════════════════════════════════════════════════════════
+
+_ADMIN_CACHE_PREFIX = "admin:"
+
+async def _admin_cache_get(key: str) -> Optional[Any]:
+    """Get from admin cache."""
+    try:
+        return await r_get_json(f"{_ADMIN_CACHE_PREFIX}{key}")
+    except Exception:
+        return None
+
+async def _admin_cache_set(key: str, data: Any, ttl: int = 120):
+    """Set admin cache with short TTL (default 2 min)."""
+    try:
+        await r_set(f"{_ADMIN_CACHE_PREFIX}{key}", data, ttl=ttl)
+    except Exception:
+        pass
+
+
+async def _invalidate_admin_cache():
+    """Bust all admin cache keys after a mutating operation."""
+    keys_to_clear = [
+        "stats:exact", "stats:approx",
+        "refill-alerts", "stock-pred", "expiry-risk",
+    ]
+    for k in keys_to_clear:
+        try:
+            await r_del(f"{_ADMIN_CACHE_PREFIX}{k}")
+        except Exception:
+            pass
+    # Also clear parameterised cache keys via pattern scan
+    try:
+        from app.singletons import get_redis
+        rd = await get_redis()
+        if rd:
+            async for key in rd.scan_iter(match=f"{_ADMIN_CACHE_PREFIX}*", count=200):
+                await rd.delete(key)
+    except Exception:
+        pass
+
+
+# ══════════════════════════════════════════════════════════════
 # Dashboard stats endpoint
 # ══════════════════════════════════════════════════════════════
 
 @router.get("/stats")
-async def dashboard_stats():
-    """Quick counts for every table — used by the admin dashboard."""
-    counts = {}
-    for slug, cfg in TABLE_REGISTRY.items():
-        row = await db_fetchrow(f'SELECT COUNT(*) AS cnt FROM {_safe_ident(cfg["table"])}')
-        counts[slug] = row["cnt"] if row else 0
+async def dashboard_stats(exact: bool = Query(False, description="Use exact COUNT(*) instead of fast estimates")):
+    """Quick counts for every table — used by the admin dashboard.
+
+    By default uses PostgreSQL's pg_stat_user_tables for instant (~1ms) approximate
+    row counts.  Pass ?exact=true for precise COUNT(*) — runs all queries in parallel
+    via asyncio.gather.
+    """
+    # Try cache first (both exact and approx share separate cache keys)
+    cache_key = f"stats:{'exact' if exact else 'approx'}"
+    cached = await _admin_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    if not exact:
+        # ── Fast path: single query using pg catalog estimates (~1ms) ──
+        table_names = [cfg["table"] for cfg in TABLE_REGISTRY.values()]
+        rows = await db_fetch(
+            """SELECT relname, GREATEST(n_live_tup, 0) AS row_estimate
+               FROM pg_stat_user_tables
+               WHERE schemaname = 'public'"""
+        )
+        pg_counts = {r["relname"]: int(r["row_estimate"]) for r in rows}
+        counts = {slug: pg_counts.get(cfg["table"], 0) for slug, cfg in TABLE_REGISTRY.items()}
+    else:
+        # ── Exact path: parallel COUNT(*) via asyncio.gather ──
+        async def _count(slug: str, cfg: dict) -> tuple[str, int]:
+            row = await db_fetchrow(f'SELECT COUNT(*) AS cnt FROM {_safe_ident(cfg["table"])}')
+            return slug, row["cnt"] if row else 0
+
+        results = await asyncio.gather(
+            *[_count(slug, cfg) for slug, cfg in TABLE_REGISTRY.items()]
+        )
+        counts = dict(results)
+
+    await _admin_cache_set(cache_key, counts, ttl=90)
     return counts
 
 
@@ -601,7 +675,9 @@ async def crud_create(slug: str, request: Request):
     if not cfg:
         raise HTTPException(404, f"Unknown table: {slug}")
     body = await request.json()
-    return await _create_row(cfg, body)
+    result = await _create_row(cfg, body)
+    await _invalidate_admin_cache()
+    return result
 
 
 @router.put("/crud/{slug}/{pk_value}")
@@ -612,7 +688,9 @@ async def crud_update(slug: str, pk_value: str, request: Request):
         raise HTTPException(404, f"Unknown table: {slug}")
     pk = _cast_pk(cfg["pk_type"], pk_value)
     body = await request.json()
-    return await _update_row(cfg, pk, body)
+    result = await _update_row(cfg, pk, body)
+    await _invalidate_admin_cache()
+    return result
 
 
 @router.delete("/crud/{slug}/{pk_value}")
@@ -622,7 +700,9 @@ async def crud_delete(slug: str, pk_value: str):
     if not cfg:
         raise HTTPException(404, f"Unknown table: {slug}")
     pk = _cast_pk(cfg["pk_type"], pk_value)
-    return await _delete_row(cfg, pk)
+    result = await _delete_row(cfg, pk)
+    await _invalidate_admin_cache()
+    return result
 
 
 # ══════════════════════════════════════════════════════════════
@@ -647,6 +727,7 @@ async def crud_bulk_delete(slug: str, request: Request):
         f"DELETE FROM {table} WHERE {pk} = ANY($1)", cast_ids
     )
     count = int(result.split()[-1]) if result else 0
+    await _invalidate_admin_cache()
     return {"deleted": count}
 
 
@@ -696,6 +777,10 @@ async def refill_alerts():
 
     Returns a unified list sorted by urgency (fewest remaining first).
     """
+    cached = await _admin_cache_get("refill-alerts")
+    if cached is not None:
+        return cached
+
     rows = await db_fetch(
         """
         -- Source 1: reminder-based refills (existing refill_due_view logic)
@@ -751,7 +836,9 @@ async def refill_alerts():
         ORDER BY qty_remaining ASC, updated_at DESC
         """
     )
-    return _serialise(rows)
+    result = _serialise(rows)
+    await _admin_cache_set("refill-alerts", result, ttl=120)
+    return result
 
 
 @router.get("/refill-forecast")
@@ -765,6 +852,11 @@ async def refill_forecast(days_ahead: int = Query(14, ge=1, le=90)):
 
     Returns patients whose predicted runout is within `days_ahead`.
     """
+    cache_key = f"refill-forecast:{days_ahead}"
+    cached = await _admin_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     today = date.today()
     cutoff = today + timedelta(days=days_ahead)
 
@@ -818,12 +910,14 @@ async def refill_forecast(days_ahead: int = Query(14, ge=1, le=90)):
         """,
         cutoff,
     )
-    return {
+    result = {
         "days_ahead": days_ahead,
         "cutoff_date": cutoff.isoformat(),
         "patients_needing_refill": len(rows),
         "data": _serialise(rows),
     }
+    await _admin_cache_set(cache_key, result, ttl=120)
+    return result
 
 
 # ══════════════════════════════════════════════════════════════
@@ -847,6 +941,11 @@ async def stock_prediction(
 
     Returns per-drug forecast sorted by days_until_stockout (most urgent first).
     """
+    cache_key = f"stock-pred:{days_ahead}:{include_all}"
+    cached = await _admin_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     rows = await db_fetch(
         """
         WITH historic_demand AS (
@@ -939,13 +1038,15 @@ async def stock_prediction(
     now_count = sum(1 for r in rows if r.get("reorder_flag") == "reorder_now")
     soon_count = sum(1 for r in rows if r.get("reorder_flag") == "reorder_soon")
 
-    return {
+    result = {
         "days_ahead": days_ahead,
         "reorder_now": now_count,
         "reorder_soon": soon_count,
         "total_items": len(rows),
         "data": _serialise(rows),
     }
+    await _admin_cache_set(cache_key, result, ttl=120)
+    return result
 
 
 @router.get("/stock-prediction/{drug_name}")
@@ -1073,6 +1174,11 @@ async def expiry_risk(days_ahead: int = Query(60, ge=1, le=365)):
     For each expiring batch, estimates whether current demand will consume
     the stock before expiry — or if it will go to waste.
     """
+    cache_key = f"expiry-risk:{days_ahead}"
+    cached = await _admin_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     cutoff = date.today() + timedelta(days=days_ahead)
 
     rows = await db_fetch(
@@ -1120,10 +1226,12 @@ async def expiry_risk(days_ahead: int = Query(60, ge=1, le=365)):
 
     total_waste_value = sum(float(r.get("estimated_waste_value", 0)) for r in rows)
 
-    return {
+    result = {
         "days_ahead": days_ahead,
         "cutoff_date": cutoff.isoformat(),
         "expiring_items": len(rows),
         "total_estimated_waste_value": round(total_waste_value, 2),
         "data": _serialise(rows),
     }
+    await _admin_cache_set(cache_key, result, ttl=120)
+    return result

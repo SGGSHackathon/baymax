@@ -25,6 +25,9 @@ import {
     Thermometer,
     BriefcaseMedical,
     Microscope,
+    LayoutDashboard,
+    Database,
+    PackageCheck,
 } from "lucide-react";
 import Link from "next/link";
 import React from "react";
@@ -136,6 +139,22 @@ function DashboardContent() {
             ],
             isExternal: true,
         },
+        {
+            title: "Admin Panel",
+            icon: <LayoutDashboard size={32} strokeWidth={1.8} />,
+            href: "/admin",
+            gradient: "from-slate-600 via-slate-700 to-slate-800",
+            lightBg: "bg-slate-100",
+            lightText: "text-slate-600",
+            shadow: "shadow-slate-500/20",
+            description: "Manage inventory, track stock levels, and oversee all system data.",
+            features: [
+                { icon: <Database size={15} />, text: "Full database CRUD access" },
+                { icon: <PackageCheck size={15} />, text: "Stock & refill predictions" },
+                { icon: <ShieldAlert size={15} />, text: "Expiry risk monitoring" },
+            ],
+            isExternal: false,
+        },
     ];
 
     return (
@@ -240,7 +259,7 @@ function DashboardContent() {
                 </motion.div>
 
                 {/* Cards */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-7 w-full max-w-6xl">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-7 w-full max-w-6xl">
                     {cards.map((card, idx) => (
                         <motion.div
                             key={idx}

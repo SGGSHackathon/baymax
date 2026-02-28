@@ -13,7 +13,9 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
     Send, Mic, Square, Loader2, ArrowLeft, Search,
     Globe, Stethoscope, CheckCircle2,
-    AlertTriangle, User as UserIcon, ArrowUp
+    AlertTriangle, User as UserIcon, ArrowUp,
+    VolumeX, Volume2, ExternalLink, MicOff,
+    MessageSquare, Phone, PhoneOff,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -828,7 +830,7 @@ export default function ChatPage() {
                     </p>
                 </div>
             </div>
-        </motion.div>
+        </div>
     );
 }
 
