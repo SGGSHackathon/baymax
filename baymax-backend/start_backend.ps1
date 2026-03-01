@@ -8,7 +8,9 @@ if ($existing) {
   Start-Sleep -Seconds 2
 }
 
-if (Test-Path .\.venv\Scripts\Activate.ps1) {
+if (Test-Path .\.venv312\Scripts\Activate.ps1) {
+  & .\.venv312\Scripts\Activate.ps1
+} elseif (Test-Path .\.venv\Scripts\Activate.ps1) {
   & .\.venv\Scripts\Activate.ps1
 }
 

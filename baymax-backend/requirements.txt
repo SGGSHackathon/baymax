@@ -27,6 +27,7 @@ redis==5.0.0
 
 # Web Search
 ddgs>=9.0.0
+langfuse>=2.52.0,<3.0.0
 
 # Auth
 PyJWT>=2.8.0

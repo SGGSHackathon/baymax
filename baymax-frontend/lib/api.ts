@@ -294,6 +294,13 @@ export const dataService = {
         return res.data;
     },
 
+    updateDrugDuration: async (prescriptionId: string, drugIndex: number, durationDays: number) => {
+        const res = await api.post(
+            `/prescriptions/update-duration/${encodeURIComponent(prescriptionId)}?drug_index=${drugIndex}&duration_days=${durationDays}`
+        );
+        return res.data;
+    },
+
     // ── Reminder Management ──
     createReminder: async (data: {
         order_id: string;
@@ -311,6 +318,41 @@ export const dataService = {
 
     deleteReminder: async (reminderId: string): Promise<any> => {
         const res = await api.delete(`/reminders/${encodeURIComponent(reminderId)}`);
+        return res.data;
+    },
+
+    // ── Orders & Payment ──
+    createOrder: async (data: {
+        user_id: string;
+        items: Array<{ drug_name: string; quantity: number; unit_price: number; inventory_id?: string | null }>;
+        prescription_id?: string | null;
+        delivery_address?: string | null;
+    }) => {
+        const res = await api.post("/orders/create", data);
+        return res.data;
+    },
+
+    initiatePayment: async (orderId: string) => {
+        const res = await api.post(`/orders/initiate-payment/${encodeURIComponent(orderId)}`);
+        return res.data;
+    },
+
+    verifyPayment: async (data: {
+        razorpay_order_id: string;
+        razorpay_payment_id: string;
+        razorpay_signature: string;
+    }) => {
+        const res = await api.post("/orders/verify-payment", data);
+        return res.data;
+    },
+
+    getOrderByRazorpayId: async (razorpayOrderId: string) => {
+        const res = await withRetry(() => api.get(`/orders/razorpay/${encodeURIComponent(razorpayOrderId)}`));
+        return res.data;
+    },
+
+    getUserOrders: async (userId: string) => {
+        const res = await withRetry(() => api.get(`/orders/user/${encodeURIComponent(userId)}`));
         return res.data;
     },
 };

@@ -16,6 +16,7 @@ import {
     CheckCircle,
 } from "lucide-react";
 import { adminService, type ExpiryRiskResponse, type ExpiryRiskItem } from "@/lib/adminApi";
+import { getMockExpiryRisk } from "@/lib/adminMockData";
 
 /* ── Risk badge ── */
 function RiskBadge({ level }: { level: string }) {
@@ -40,6 +41,7 @@ export default function ExpiryRiskPage() {
     const [data, setData] = useState<ExpiryRiskResponse | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
+    const [usingDemoData, setUsingDemoData] = useState(false);
     const [daysAhead, setDaysAhead] = useState(60);
     const [searchTerm, setSearchTerm] = useState("");
 
@@ -48,9 +50,17 @@ export default function ExpiryRiskPage() {
         setError("");
         try {
             const result = await adminService.getExpiryRisk(daysAhead);
-            setData(result);
+               if (!result?.data?.length) {
+                   setData(getMockExpiryRisk(daysAhead));
+                   setUsingDemoData(true);
+               } else {
+                   setData(result);
+                   setUsingDemoData(false);
+               }
         } catch (e: any) {
-            setError(e?.apiError?.message || "Failed to load expiry risk data");
+               setData(getMockExpiryRisk(daysAhead));
+               setUsingDemoData(true);
+               setError("");
         } finally {
             setLoading(false);
         }
@@ -115,6 +125,12 @@ export default function ExpiryRiskPage() {
                     {error}
                 </div>
             )}
+
+               {usingDemoData && (
+                   <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-blue-700 text-sm" style={{ fontFamily: "var(--font-poppins)" }}>
+                       Showing demo Expiry Risk data (backend data unavailable or empty).
+                   </div>
+               )}
 
             {/* Summary Cards */}
             {data && !loading && (

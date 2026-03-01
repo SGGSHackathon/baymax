@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, use } from "react";
+import { useEffect, useState, useCallback, use, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -30,6 +30,17 @@ import {
     type ColumnSchema,
     type TableSchemaResponse,
 } from "@/lib/adminApi";
+import {
+    AISummaryWidget,
+    getRowRiskBadge,
+    isLikelyLogsDataset,
+    matchesSmartFilter,
+    ProactiveInsights,
+    RiskTrendChart,
+    shouldShowAlert,
+    SmartFilters,
+    type SmartFilter,
+} from "@/components/admin/ProactiveInsights";
 
 /* ── Helpers ── */
 function formatCellValue(val: any): string {
@@ -388,6 +399,7 @@ function DeleteConfirm({
 export default function TableDetailPage({ params }: { params: Promise<{ slug: string }> }) {
     const { slug } = use(params);
     const router = useRouter();
+    const isClinicalLogsTable = ["clinical-decision-log", "dfe-question-log", "web-search-log"].includes(slug);
 
     const [schema, setSchema] = useState<TableSchemaResponse | null>(null);
     const [data, setData] = useState<PaginatedRows | null>(null);
@@ -396,11 +408,13 @@ export default function TableDetailPage({ params }: { params: Promise<{ slug: st
 
     // Pagination & search
     const [page, setPage] = useState(1);
-    const [perPage] = useState(25);
+    const perPage = isClinicalLogsTable ? 100 : 25;
     const [search, setSearch] = useState("");
     const [searchInput, setSearchInput] = useState("");
     const [sortCol, setSortCol] = useState<string | null>(null);
     const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+    const [smartFilter, setSmartFilter] = useState<SmartFilter>("all");
+    const [dismissedProactiveAlert, setDismissedProactiveAlert] = useState(false);
 
     // Selection
     const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -457,6 +471,56 @@ export default function TableDetailPage({ params }: { params: Promise<{ slug: st
     // Visible columns (first 8 for table view)
     const visibleCols = schema?.columns?.slice(0, 8) || [];
 
+    const rawRows = useMemo(() => data?.data || [], [data]);
+    const isLogsDataset = useMemo(() => isLikelyLogsDataset(rawRows), [rawRows]);
+    const filteredRows = useMemo(() => {
+        if (!isLogsDataset || smartFilter === "all") return rawRows;
+        return rawRows.filter((row) => matchesSmartFilter(row, smartFilter));
+    }, [isLogsDataset, rawRows, smartFilter]);
+    const showProactiveAlert = useMemo(() => {
+        if (!isLogsDataset || dismissedProactiveAlert) return false;
+        return shouldShowAlert(rawRows, 5);
+    }, [isLogsDataset, rawRows, dismissedProactiveAlert]);
+
+    const renderEnhancedCell = (row: Record<string, any>, colName: string) => {
+        const rawValue = row[colName];
+        const normalized = colName.toLowerCase();
+
+        if (["riskscore", "risk_score", "risk", "risk_score_value"].includes(normalized)) {
+            const num = typeof rawValue === "number" ? rawValue : Number(rawValue);
+            if (Number.isFinite(num)) {
+                const badge = getRowRiskBadge(num);
+                return (
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-md border text-xs font-semibold ${badge.className}`}>
+                        {badge.label}
+                    </span>
+                );
+            }
+        }
+
+        if (["escalationrequired", "escalation_required", "requiresescalation", "requires_escalation"].includes(normalized)) {
+            const val = typeof rawValue === "boolean"
+                ? rawValue
+                : typeof rawValue === "string"
+                    ? ["true", "1", "yes"].includes(rawValue.toLowerCase())
+                    : rawValue === 1;
+
+            if (val) {
+                return (
+                    <span className="inline-flex items-center gap-1.5 text-red-600 text-xs font-semibold">
+                        <span className="relative flex h-2.5 w-2.5">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+                            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500" />
+                        </span>
+                        Escalate
+                    </span>
+                );
+            }
+        }
+
+        return isTimestamp(colName) ? formatDate(rawValue) : formatCellValue(rawValue);
+    };
+
     // Sort handler
     const handleSort = (col: string) => {
         if (sortCol === col) {
@@ -480,7 +544,7 @@ export default function TableDetailPage({ params }: { params: Promise<{ slug: st
 
     const toggleSelectAll = () => {
         if (!data) return;
-        const allIds = data.data.map((r) => String(r[pk]));
+        const allIds = filteredRows.map((r) => String(r[pk]));
         const allSelected = allIds.every((id) => selected.has(id));
         if (allSelected) {
             setSelected(new Set());
@@ -613,6 +677,40 @@ export default function TableDetailPage({ params }: { params: Promise<{ slug: st
                 </div>
             </motion.div>
 
+            {isLogsDataset && (
+                <>
+                    {showProactiveAlert && (
+                        <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 flex items-start justify-between gap-3">
+                            <div>
+                                <p className="text-sm font-bold text-red-700">Proactive Alert</p>
+                                <p className="text-xs text-red-600 mt-0.5">High-risk responses in last 24 hours crossed the threshold.</p>
+                            </div>
+                            <button
+                                onClick={() => setDismissedProactiveAlert(true)}
+                                className="p-1.5 rounded-lg hover:bg-red-100 text-red-500"
+                            >
+                                <X size={14} />
+                            </button>
+                        </div>
+                    )}
+
+                    <ProactiveInsights rows={rawRows} />
+
+                    <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                        <div className="xl:col-span-2">
+                            <RiskTrendChart rows={rawRows} />
+                        </div>
+                        <AISummaryWidget rows={rawRows} />
+                    </div>
+
+                    <SmartFilters
+                        active={smartFilter}
+                        onChange={setSmartFilter}
+                        rows={rawRows}
+                    />
+                </>
+            )}
+
             {/* Error */}
             {error && (
                 <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-red-600 text-sm" style={{ fontFamily: "var(--font-poppins)" }}>
@@ -634,7 +732,7 @@ export default function TableDetailPage({ params }: { params: Promise<{ slug: st
                                 <th className="w-10 px-3 py-3">
                                     <input
                                         type="checkbox"
-                                        checked={data?.data?.length ? data.data.every((r) => selected.has(String(r[pk]))) : false}
+                                        checked={filteredRows.length ? filteredRows.every((r) => selected.has(String(r[pk]))) : false}
                                         onChange={toggleSelectAll}
                                         className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
                                     />
@@ -673,7 +771,7 @@ export default function TableDetailPage({ params }: { params: Promise<{ slug: st
                                     </td>
                                 </tr>
                             )}
-                            {data?.data?.map((row, i) => {
+                            {filteredRows.map((row, i) => {
                                 const id = String(row[pk]);
                                 const isSelected = selected.has(id);
                                 return (
@@ -701,9 +799,11 @@ export default function TableDetailPage({ params }: { params: Promise<{ slug: st
                                                 className="px-3 py-2.5 text-slate-600 whitespace-nowrap max-w-[200px] truncate"
                                                 style={{ fontFamily: "var(--font-poppins)", fontWeight: 400, fontSize: "13px" }}
                                             >
-                                                {isTimestamp(col.column_name)
-                                                    ? formatDate(row[col.column_name])
-                                                    : formatCellValue(row[col.column_name])}
+                                                {isLogsDataset
+                                                    ? renderEnhancedCell(row, col.column_name)
+                                                    : isTimestamp(col.column_name)
+                                                        ? formatDate(row[col.column_name])
+                                                        : formatCellValue(row[col.column_name])}
                                             </td>
                                         ))}
                                         <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
@@ -731,11 +831,11 @@ export default function TableDetailPage({ params }: { params: Promise<{ slug: st
                                     </motion.tr>
                                 );
                             })}
-                            {data && data.data.length === 0 && (
+                            {data && filteredRows.length === 0 && (
                                 <tr>
                                     <td colSpan={visibleCols.length + 2} className="text-center py-16">
                                         <p className="text-slate-300 text-sm" style={{ fontFamily: "var(--font-poppins)" }}>
-                                            No rows found
+                                            {isLogsDataset && smartFilter !== "all" ? "No rows found for selected filter" : "No rows found"}
                                         </p>
                                     </td>
                                 </tr>

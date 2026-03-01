@@ -420,6 +420,16 @@ async def intent_router(state: MedState) -> MedState:
 
     # ── Keyword fast-paths: skip LLM for obvious intents (~400ms saved) ──
     msg_lower = message.lower().strip()
+    if "web search" in msg_lower:
+        cleaned_query = re.sub(r"\bweb\s*search\b", "", message, flags=re.I).strip(" :,-")
+        return {
+            **state,
+            "intent": "general",
+            "intent_conf": 1.0,
+            "force_web_search": True,
+            "web_search_query": cleaned_query or message,
+        }
+
     if not active_flow:
         # Order intents — only if a specific drug name seems present (not vague)
         vague_order_words = {"medicine", "tablet", "something", "best", "which", "what", "suggest", "recommend", "kuch"}

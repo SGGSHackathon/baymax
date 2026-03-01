@@ -24,6 +24,7 @@ import {
     type RefillForecastResponse,
     type RefillForecastItem,
 } from "@/lib/adminApi";
+import { MOCK_REFILL_ALERTS, getMockRefillForecast } from "@/lib/adminMockData";
 
 /* ── Urgency Badge ── */
 function UrgencyBadge({ urgency }: { urgency: string }) {
@@ -71,6 +72,7 @@ export default function RefillAlertsPage() {
     const [daysAhead, setDaysAhead] = useState(14);
 
     const [error, setError] = useState("");
+    const [usingDemoData, setUsingDemoData] = useState(false);
     const [searchTerm, setSearchTerm] = useState("");
 
     const fetchAlerts = async () => {
@@ -78,9 +80,18 @@ export default function RefillAlertsPage() {
         setError("");
         try {
             const data = await adminService.getRefillAlerts();
-            setAlerts(Array.isArray(data) ? data : []);
+            const parsedAlerts = Array.isArray(data) ? data : [];
+            if (!parsedAlerts.length) {
+                setAlerts(MOCK_REFILL_ALERTS);
+                setUsingDemoData(true);
+            } else {
+                setAlerts(parsedAlerts);
+                setUsingDemoData(false);
+            }
         } catch (e: any) {
-            setError(e?.apiError?.message || "Failed to load refill alerts");
+            setAlerts(MOCK_REFILL_ALERTS);
+            setUsingDemoData(true);
+            setError("");
         } finally {
             setAlertsLoading(false);
         }
@@ -91,9 +102,16 @@ export default function RefillAlertsPage() {
         setError("");
         try {
             const data = await adminService.getRefillForecast(daysAhead);
-            setForecast(data);
+            if (!data?.data?.length) {
+                setForecast(getMockRefillForecast(daysAhead));
+                setUsingDemoData(true);
+            } else {
+                setForecast(data);
+            }
         } catch (e: any) {
-            setError(e?.apiError?.message || "Failed to load forecast");
+            setForecast(getMockRefillForecast(daysAhead));
+            setUsingDemoData(true);
+            setError("");
         } finally {
             setForecastLoading(false);
         }
@@ -224,6 +242,12 @@ export default function RefillAlertsPage() {
             {error && (
                 <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-red-600 text-sm" style={{ fontFamily: "var(--font-poppins)" }}>
                     {error}
+                </div>
+            )}
+
+            {usingDemoData && (
+                <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-blue-700 text-sm" style={{ fontFamily: "var(--font-poppins)" }}>
+                    Showing demo Refill data (backend data unavailable or empty).
                 </div>
             )}
 

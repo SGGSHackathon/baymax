@@ -10,7 +10,7 @@ from typing import Optional, Literal
 
 import bcrypt
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, BackgroundTasks
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, field_validator
 
@@ -19,6 +19,7 @@ from app.singletons import get_pool, get_redis
 from app.db.helpers import update_user
 from app.db.redis_helpers import r_del
 from app.models import normalize_phone
+from app.api.order_router import send_registration_email, send_sms
 
 logger = logging.getLogger("medai.v6")
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -190,7 +191,7 @@ async def get_current_user(creds: HTTPAuthorizationCredentials = Depends(_bearer
 # ── Routes ────────────────────────────────────────────────────
 
 @router.post("/signup", response_model=AuthResponse, status_code=201)
-async def signup(req: SignupRequest):
+async def signup(req: SignupRequest, background_tasks: BackgroundTasks):
     """Register a new user with full profile."""
     pool = await get_pool()
 
@@ -221,6 +222,17 @@ async def signup(req: SignupRequest):
     token = _create_token(user_id, req.email)
 
     logger.info(f"Signup: {req.email} / {req.phone} → {user_id}")
+
+    # Send welcome email + SMS in background
+    if req.email:
+        background_tasks.add_task(send_registration_email, req.email, req.name)
+    if req.phone:
+        background_tasks.add_task(
+            send_sms, req.phone,
+            f"Welcome to BayMax, {req.name}! 🏥 Your AI health assistant is ready. "
+            f"Login at {C.WEBSITE_BASE_URL}/login to get started!"
+        )
+
     return AuthResponse(token=token, user=_user_dict(row))
 
 

@@ -183,6 +183,41 @@ async def check_stock(drug: str) -> Optional[dict]:
     return row
 
 
+async def find_brand_in_message(message: str) -> Optional[dict]:
+        """Find exact brand mention inside a free-text message.
+
+        Returns matching inventory row even if stock is 0, so caller can suggest alternatives.
+        """
+        return await db_fetchrow(
+                """SELECT id, drug_name, brand_name, stock_qty, unit, price_per_unit, is_otc, strength, form, drug_class
+                     FROM inventory
+                     WHERE is_active=TRUE
+                         AND brand_name IS NOT NULL
+                         AND POSITION(LOWER(brand_name) IN LOWER($1)) > 0
+                     ORDER BY LENGTH(brand_name) DESC, expiry_date ASC
+                     LIMIT 1""",
+                message,
+        )
+
+
+async def get_alternative_brands(drug_name: str, exclude_brand: Optional[str] = None,
+                                                                 limit: int = 3) -> list[dict]:
+        """Get in-stock alternatives for the same generic drug_name."""
+        return await db_fetch(
+                """SELECT id, drug_name, brand_name, stock_qty, unit, price_per_unit, is_otc, strength, form, drug_class
+                     FROM inventory
+                     WHERE is_active=TRUE
+                         AND stock_qty>0
+                         AND LOWER(drug_name)=LOWER($1)
+                         AND ($2::text IS NULL OR LOWER(COALESCE(brand_name,'')) <> LOWER($2))
+                     ORDER BY stock_qty DESC, times_ordered DESC, expiry_date ASC
+                     LIMIT $3""",
+                drug_name,
+                exclude_brand,
+                limit,
+        )
+
+
 async def log_audit(user_id: str, action: str, entity_type: str = None,
                     entity_id: str = None, old_val: dict = None,
                     new_val: dict = None, performed_by: str = "system"):

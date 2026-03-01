@@ -11,10 +11,11 @@ import {
     Loader2, ArrowLeft, Save, User as UserIcon, Activity,
     Pill, Clock, FileText, AlertTriangle, Edit3, HeartPulse,
     FileImage, ChevronDown, Eye, CheckCircle, AlertCircle,
-    Bell, BellOff, X, Plus
+    Bell, BellOff, X, Plus, CreditCard
 } from "lucide-react";
 import type { Language, FullHistory, Reminder, MedicineCourse } from "@/types/api";
 import type { PrescriptionSummary, PrescriptionDetail } from "@/types/api";
+import Script from "next/script";
 
 export default function FullProfilePage() {
     const router = useRouter();
@@ -54,6 +55,7 @@ export default function FullProfilePage() {
         meal: "after_meal",
     });
     const [reminderSaving, setReminderSaving] = useState(false);
+    const [payingOrderId, setPayingOrderId] = useState<string | null>(null);
 
     useEffect(() => {
         if (!authService.isAuthenticated()) {
@@ -217,6 +219,63 @@ export default function FullProfilePage() {
             setHistory(fullHist);
         } catch {
             toast("Failed to disable reminder", "error");
+        }
+    };
+
+    // ─── Pay for a pending_payment order via Razorpay ───
+    const handlePayOrder = async (order: { id: string; drug_name: string; quantity: number; total_price: number }) => {
+        setPayingOrderId(order.id);
+        try {
+            const rzData = await dataService.initiatePayment(order.id);
+            const options: RazorpayOptions = {
+                key: rzData.key_id,
+                amount: Math.round(rzData.amount * 100),
+                currency: rzData.currency || "INR",
+                name: "BayMax Pharmacy",
+                description: `${order.drug_name} ×${order.quantity}`,
+                order_id: rzData.razorpay_order_id,
+                prefill: {
+                    name: rzData.user_name,
+                    email: rzData.user_email,
+                    contact: rzData.user_phone,
+                },
+                theme: { color: "#059669" },
+                handler: async (response) => {
+                    try {
+                        await dataService.verifyPayment({
+                            razorpay_order_id: response.razorpay_order_id,
+                            razorpay_payment_id: response.razorpay_payment_id,
+                            razorpay_signature: response.razorpay_signature,
+                        });
+                        toast("Payment successful! Order confirmed.", "success");
+                        // Refresh history to update order status
+                        const fullHist = await dataService.getFullHistory(user?.phone || "");
+                        setHistory(fullHist);
+                    } catch {
+                        toast("Payment verified but order update failed. Contact support.", "error");
+                    } finally {
+                        setPayingOrderId(null);
+                    }
+                },
+                modal: {
+                    ondismiss: () => {
+                        setPayingOrderId(null);
+                        toast("Payment cancelled", "error");
+                    },
+                },
+            };
+
+            if (typeof window !== "undefined" && window.Razorpay) {
+                const rzp = new window.Razorpay(options);
+                rzp.open();
+            } else {
+                toast("Payment gateway not loaded. Please refresh and try again.", "error");
+                setPayingOrderId(null);
+            }
+        } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : "Failed to initiate payment";
+            toast(msg, "error");
+            setPayingOrderId(null);
         }
     };
 
@@ -575,6 +634,7 @@ export default function FullProfilePage() {
                                                 <div className="space-y-4">
                                                     {orders.map(o => {
                                                         const existingReminder = getReminderForOrder(o.id);
+                                                        const canPayNow = o.status !== 'cancelled' && o.status !== 'delivered' && o.status !== 'confirmed' && o.payment_status !== 'paid';
                                                         return (
                                                             <div key={o.id} className="p-5 border border-slate-200 rounded-2xl hover:border-slate-300 transition-all bg-white">
                                                                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -583,10 +643,12 @@ export default function FullProfilePage() {
                                                                             <h3 className="font-bold text-base text-slate-800">{o.drug_name.charAt(0).toUpperCase() + o.drug_name.slice(1)}</h3>
                                                                             <span className={`px-2.5 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-widest ${
                                                                                 o.status === 'delivered' ? 'bg-emerald-50 text-emerald-600' :
+                                                                                o.status === 'confirmed' ? 'bg-emerald-50 text-emerald-600' :
                                                                                 o.status === 'pending' ? 'bg-amber-50 text-amber-600' :
+                                                                                o.status === 'pending_payment' ? 'bg-orange-50 text-orange-600' :
                                                                                 o.status === 'cancelled' ? 'bg-red-50 text-red-500' :
                                                                                 'bg-slate-100 text-slate-600'
-                                                                            }`}>{o.status}</span>
+                                                                            }`}>{canPayNow ? 'Awaiting Payment' : o.status}</span>
                                                                         </div>
                                                                         <p className="text-xs text-slate-500 font-medium mt-1">
                                                                             <span className="font-mono">{o.order_number}</span>
@@ -598,8 +660,20 @@ export default function FullProfilePage() {
                                                                         </p>
                                                                     </div>
 
-                                                                    {/* Reminder toggle */}
-                                                                    <div className="shrink-0">
+                                                                    {/* Pay Now + Reminder toggle */}
+                                                                    <div className="shrink-0 flex items-center gap-2">
+                                                                        {canPayNow && (
+                                                                            <button
+                                                                                onClick={() => handlePayOrder(o)}
+                                                                                disabled={payingOrderId === o.id}
+                                                                                className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-700 transition-all active:scale-[0.97] shadow-sm disabled:opacity-60"
+                                                                            >
+                                                                                {payingOrderId === o.id
+                                                                                    ? <><Loader2 size={14} className="animate-spin" /> Processing...</>
+                                                                                    : <><CreditCard size={14} /> Pay ₹{o.total_price}</>
+                                                                                }
+                                                                            </button>
+                                                                        )}
                                                                         {existingReminder ? (
                                                                             <button
                                                                                 onClick={() => handleDisableReminder(existingReminder.id)}
@@ -607,7 +681,7 @@ export default function FullProfilePage() {
                                                                             >
                                                                                 <Bell size={14} /> Reminder Active
                                                                             </button>
-                                                                        ) : o.status !== 'cancelled' ? (
+                                                                        ) : o.status !== 'cancelled' && !canPayNow ? (
                                                                             <button
                                                                                 onClick={() => openReminderModal(o.id, o.drug_name, o.quantity)}
                                                                                 className="flex items-center gap-2 px-4 py-2 bg-slate-50 text-slate-600 border border-slate-200 rounded-xl text-xs font-bold hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-200 transition-all"
@@ -1005,6 +1079,8 @@ export default function FullProfilePage() {
             )}
 
             </main>
+            {/* Razorpay SDK */}
+            <Script src="https://checkout.razorpay.com/v1/checkout.js" strategy="lazyOnload" />
         </div>
     );
 }

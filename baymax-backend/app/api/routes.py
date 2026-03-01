@@ -9,7 +9,7 @@ import logging
 import base64
 from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, UploadFile, File, Form
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, UploadFile, File, Form, Request
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -43,6 +43,12 @@ from app.services.sarvam import (
 )
 from app.graph.state import MedState
 from app.graph.builder import build_graph
+from app.observability.langfuse_client import (
+    start_generation,
+    start_span,
+    end_observation,
+    capture_exception,
+)
 
 logger = logging.getLogger("medai.v6")
 
@@ -70,6 +76,7 @@ def _make_initial_state(phone: str, message: str, session_id: str, channel: str,
         "active_flow": None, "conv_memory": None,
         "dfe_triggered": False, "dfe_question": None, "dfe_context": None,
         "web_search_used": False, "web_search_source": None, "behavioral_profile": None,
+        "force_web_search": False, "web_search_query": None,
     }
 
 
@@ -666,9 +673,10 @@ def _simple_reply(msg: str) -> str:
 
 # ── Streaming Endpoint ────────────────────────────────────────
 @router.post("/stream")
-async def stream_chat(req: WhatsAppIncoming, bg: BackgroundTasks):
+async def stream_chat(req: WhatsAppIncoming, bg: BackgroundTasks, request: Request):
     phone      = req.phone
     session_id = req.session_id or f"web_{hashlib.md5(phone.encode()).hexdigest()[:12]}"
+    trace = getattr(request.state, "trace", None)
 
     async def event_generator():
         try:
@@ -679,9 +687,30 @@ async def stream_chat(req: WhatsAppIncoming, bg: BackgroundTasks):
                 yield "data: " + json.dumps({"type": "token", "text": reply, "done": True, "session_id": session_id, "sources": []}) + "\n\n"
                 return
 
-            user     = await get_user_by_phone(phone) or await create_user(phone)
-            history  = await get_recent_messages(session_id, limit=6)
-            summary  = await get_session_summary(str(user.get("id", "")))
+            user_lookup_span = start_span(
+                trace,
+                name="db.user.lookup_or_create",
+                input_data={"phone": phone},
+            )
+            user = await get_user_by_phone(phone) or await create_user(phone)
+            end_observation(user_lookup_span, output={"user_id": str(user.get("id", ""))})
+
+            history_span = start_span(
+                trace,
+                name="db.conversation.history",
+                input_data={"session_id": session_id, "limit": 6},
+            )
+            history = await get_recent_messages(session_id, limit=6)
+            end_observation(history_span, output={"messages": len(history or [])})
+
+            summary_span = start_span(
+                trace,
+                name="db.session.summary",
+                input_data={"user_id": str(user.get("id", ""))},
+            )
+            summary = await get_session_summary(str(user.get("id", "")))
+            end_observation(summary_span, output={"summary_found": bool(summary)})
+
             tier     = compute_risk_tier(user)
             drugs    = await extract_drugs_from_inventory(req.message)
             triage   = triage_severity(req.message)
@@ -701,9 +730,25 @@ async def stream_chat(req: WhatsAppIncoming, bg: BackgroundTasks):
             pending = await r_get_json(f"pending_action:{phone}")
             if drugs or pending:
                 logger.info(f"Stream: routing through graph (drugs={drugs}, pending={bool(pending)})")
+                graph_generation = start_generation(
+                    trace,
+                    name="graph-agent",
+                    model=C.LLM_MODEL,
+                    input_data={"message": req.message, "phone": phone, "route": "graph"},
+                    metadata={"has_drugs": bool(drugs), "has_pending": bool(pending)},
+                )
                 result = await _run_graph_and_bg(phone, req.message, session_id, "web", bg)
                 reply = result.get("reply", "")
                 order_items = _extract_order_items(result)
+                payment_data = result.get("payment_data")
+                end_observation(
+                    graph_generation,
+                    output={
+                        "agent_used": result.get("agent_used", ""),
+                        "requires_action": result.get("requires_action"),
+                        "reply": reply,
+                    },
+                )
                 # Collect sources from rag_context on the result
                 graph_sources: list[str] = []
                 for r in (result.get("rag_context") or []):
@@ -713,13 +758,19 @@ async def stream_chat(req: WhatsAppIncoming, bg: BackgroundTasks):
                 web_src = result.get("web_search_source")
                 if web_src and web_src not in graph_sources:
                     graph_sources.insert(0, web_src)
-                yield f"data: {json.dumps({'type': 'graph_result', 'text': reply, 'done': True, 'session_id': session_id, 'agent_used': result.get('agent_used', ''), 'requires_action': result.get('requires_action'), 'order_items': order_items, 'emergency': result.get('emergency', False), 'safety_flags': result.get('safety_flags', []), 'sources': graph_sources[:4], 'web_search_used': result.get('web_search_used', False)})}\n\n"
+                yield f"data: {json.dumps({'type': 'graph_result', 'text': reply, 'done': True, 'session_id': session_id, 'agent_used': result.get('agent_used', ''), 'requires_action': result.get('requires_action'), 'order_items': order_items, 'payment_data': payment_data, 'emergency': result.get('emergency', False), 'safety_flags': result.get('safety_flags', []), 'sources': graph_sources[:4], 'web_search_used': result.get('web_search_used', False)})}\n\n"
                 return
 
             hist_txt = "\n".join(
                 f"{'User' if h['role']=='user' else 'Bot'}: {h['content'][:150]}"
                 for h in history[-4:])
+            retrieval_span = start_span(
+                trace,
+                name="vector-retrieval",
+                input_data={"query": req.message, "namespace": C.NS_GENERAL, "top_k": 5},
+            )
             rag  = await retrieve(req.message, C.NS_GENERAL, top_k=5)
+            end_observation(retrieval_span, output={"matches": len(rag or [])})
             ctx  = "\n\n".join(r["text"] for r in rag[:2]) if rag else ""
 
             # Extract sources from RAG results for frontend display
@@ -737,6 +788,12 @@ async def stream_chat(req: WhatsAppIncoming, bg: BackgroundTasks):
             from langchain_groq import ChatGroq
             streaming_llm = ChatGroq(api_key=C.GROQ_API_KEY, model=C.LLM_MODEL,
                                      temperature=0.1, max_tokens=2048, streaming=True)
+            stream_generation = start_generation(
+                trace,
+                name="streaming-agent",
+                model=C.LLM_MODEL,
+                input_data={"prompt": prompt, "session_id": session_id},
+            )
             full_reply = ""
             async for chunk in streaming_llm.astream([
                 SystemMessage(content=(
@@ -754,6 +811,11 @@ async def stream_chat(req: WhatsAppIncoming, bg: BackgroundTasks):
                 if token:
                     full_reply += token
                     yield f"data: {json.dumps({'type':'token','text':token,'done':False})}\n\n"
+
+            end_observation(
+                stream_generation,
+                output={"reply": full_reply, "sources_count": len(stream_sources[:4])},
+            )
 
             yield f"data: {json.dumps({'type':'token','text':'','done':True,'session_id':session_id,'sources':stream_sources[:4]})}\n\n"
 
@@ -773,6 +835,12 @@ async def stream_chat(req: WhatsAppIncoming, bg: BackgroundTasks):
                     except: pass
 
         except Exception as e:
+            capture_exception(
+                trace,
+                e,
+                context="routes.stream_chat.event_generator",
+                metadata={"session_id": session_id, "phone": phone},
+            )
             logger.error(f"Stream error: {e}", exc_info=True)
             yield f"data: {json.dumps({'type':'error','message':'Stream error'})}\n\n"
 

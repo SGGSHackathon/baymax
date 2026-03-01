@@ -9,8 +9,11 @@ build/
 .eggs/
 .venv/
 venv/
+.venv312
+venv312
 env/
 *.egg
+**/.venv*
 
 # ── Environment / Secrets ────────────────────────────────────
 .env

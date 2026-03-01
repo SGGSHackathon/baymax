@@ -24,6 +24,7 @@ import {
     type StockPredictionItem,
     type StockDrugDetail,
 } from "@/lib/adminApi";
+import { getMockStockPrediction, getMockStockDrugDetail } from "@/lib/adminMockData";
 
 /* ── Badge component ── */
 function ReorderBadge({ flag }: { flag: string }) {
@@ -243,6 +244,7 @@ export default function StockPredictionPage() {
     const [data, setData] = useState<StockPredictionResponse | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
+    const [usingDemoData, setUsingDemoData] = useState(false);
     const [daysAhead, setDaysAhead] = useState(30);
     const [includeAll, setIncludeAll] = useState(false);
     const [searchTerm, setSearchTerm] = useState("");
@@ -257,9 +259,17 @@ export default function StockPredictionPage() {
         setError("");
         try {
             const result = await adminService.getStockPrediction(daysAhead, includeAll);
-            setData(result);
+            if (!result?.data?.length) {
+                setData(getMockStockPrediction(daysAhead));
+                setUsingDemoData(true);
+            } else {
+                setData(result);
+                setUsingDemoData(false);
+            }
         } catch (e: any) {
-            setError(e?.apiError?.message || "Failed to load stock prediction");
+            setData(getMockStockPrediction(daysAhead));
+            setUsingDemoData(true);
+            setError("");
         } finally {
             setLoading(false);
         }
@@ -274,9 +284,13 @@ export default function StockPredictionPage() {
         setDetailLoading(true);
         try {
             const detail = await adminService.getStockDrugDetail(drugName, daysAhead);
-            setDrugDetail(detail);
+            if (detail) {
+                setDrugDetail(detail);
+            } else {
+                setDrugDetail(getMockStockDrugDetail(drugName, daysAhead));
+            }
         } catch {
-            setDrugDetail(null);
+            setDrugDetail(getMockStockDrugDetail(drugName, daysAhead));
         } finally {
             setDetailLoading(false);
         }
@@ -347,6 +361,12 @@ export default function StockPredictionPage() {
             {error && (
                 <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-red-600 text-sm" style={{ fontFamily: "var(--font-poppins)" }}>
                     {error}
+                </div>
+            )}
+
+            {usingDemoData && (
+                <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-blue-700 text-sm" style={{ fontFamily: "var(--font-poppins)" }}>
+                    Showing demo Stock Forecast data (backend data unavailable or empty).
                 </div>
             )}
 
@@ -455,7 +475,7 @@ export default function StockPredictionPage() {
                             <tbody>
                                 {filteredItems.map((item, i) => (
                                     <motion.tr
-                                        key={item.drug_name}
+                                        key={`${item.drug_name}-${item.brand_name || "na"}-${i}`}
                                         initial={{ opacity: 0 }}
                                         animate={{ opacity: 1 }}
                                         transition={{ delay: i * 0.02 }}

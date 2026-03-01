@@ -18,6 +18,9 @@ class C:
     ADMIN_PHONE    = os.getenv("ADMIN_PHONE", "")
     ALLOWED_ORIGIN = os.getenv("ALLOWED_ORIGIN", "*")
     WEBSITE_BASE_URL = os.getenv("WEBSITE_BASE_URL", "http://localhost:3000")
+    LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY", "")
+    LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "")
+    LANGFUSE_HOST = os.getenv("LANGFUSE_HOST", os.getenv("LANGFUSE_BASE_URL", ""))
 
     # ── JWT Auth ──────────────────────────────────────────────
     JWT_SECRET       = os.getenv("JWT_SECRET", "change-me-in-production")

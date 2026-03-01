@@ -15,7 +15,8 @@ from app.config import C
 from app.singletons import get_llm, get_pool
 from app.db.helpers import (
     get_user_by_phone, update_user, db_fetch, db_fetchrow, db_execute,
-    get_inventory_fuzzy, check_stock, log_audit, log_health_event,
+    get_inventory_fuzzy, check_stock, find_brand_in_message, get_alternative_brands,
+    log_audit, log_health_event,
     get_dosage_cap, get_or_create_family, add_family_member,
     get_family_members, get_family_member_by_relation, create_user,
     check_duplicate_order,
@@ -619,6 +620,41 @@ async def conversation_agent(state: MedState) -> MedState:
     age     = user.get("age")
     uid     = str(user.get("id", ""))
 
+    force_web_search = bool(state.get("force_web_search"))
+    forced_query = (state.get("web_search_query") or "").strip()
+    query_l = query.lower()
+
+    if force_web_search or "web search" in query_l:
+        from app.services.web_search import controlled_web_search
+
+        cleaned_query = forced_query
+        if not cleaned_query:
+            cleaned_query = re.sub(r"\bweb\s*search\b", "", query, flags=re.I).strip(" :,-")
+        if not cleaned_query:
+            cleaned_query = query
+
+        ws = await controlled_web_search(cleaned_query)
+        if ws:
+            return {
+                **state,
+                "reply": (
+                    f"🌐 *Web Search Result*\n\n"
+                    f"{ws.get('text', '')[:900]}\n\n"
+                    f"📚 *Source:* {ws.get('domain') or ws.get('source') or 'external'}"
+                ),
+                "agent_used": "conversation_agent",
+                "web_search_used": True,
+                "web_search_source": ws.get("domain") or ws.get("source"),
+                "rag_context": [{"text": ws.get("text", ""), "source": ws.get("domain") or ws.get("source", "external")}],
+            }
+
+        return {
+            **state,
+            "reply": "I couldn't find reliable web results for that query. Please try a more specific medical query.",
+            "agent_used": "conversation_agent",
+            "web_search_used": False,
+        }
+
     # ── Order History Handler ──
     if state.get("intent") == "order_history":
         try:
@@ -651,7 +687,6 @@ async def conversation_agent(state: MedState) -> MedState:
         return {**state, "reply": reply, "agent_used": "conversation_agent"}
 
     # ── Active Medications Handler (includes reminders) ──
-    query_l = query.lower()
     active_med_signals = [
         "my med", "active med", "current med", "what am i taking",
         "my medication", "which med", "what medicine am i",
@@ -1580,7 +1615,42 @@ async def order_agent(state: MedState) -> MedState:
                 "agent_used": "order_agent",
                 "safety_flags": ["REQUIRES_DOCTOR_CONSULT"]}
 
-    inv = await check_stock(drug_name)
+    requested_brand = await find_brand_in_message(message)
+    inv = None
+
+    if requested_brand:
+        requested_brand_name = (requested_brand.get("brand_name") or "this brand").title()
+        if requested_brand.get("stock_qty", 0) > 0:
+            inv = requested_brand
+            drug_name = inv.get("drug_name", drug_name)
+        else:
+            alternatives = await get_alternative_brands(
+                requested_brand.get("drug_name", drug_name),
+                exclude_brand=requested_brand.get("brand_name"),
+                limit=3,
+            )
+            if alternatives:
+                alt_lines = [
+                    f"{i}. 💊 *{a.get('brand_name') or a.get('drug_name', '').title()}* "
+                    f"({a.get('strength', '')}) — ₹{a.get('price_per_unit')}/{a.get('unit')} | "
+                    f"📦 {a.get('stock_qty')} {a.get('unit')}s"
+                    for i, a in enumerate(alternatives, 1)
+                ]
+                return {**state,
+                        "reply": (
+                            f"😔 *{requested_brand_name}* is currently out of stock.\n\n"
+                            f"Here are available alternatives for *{requested_brand.get('drug_name', '').title()}*:\n"
+                            + "\n".join(alt_lines)
+                            + "\n\nReply with the brand name you want to order."
+                        ),
+                        "agent_used": "order_agent"}
+
+            return {**state,
+                    "reply": (f"😔 *{requested_brand_name}* is currently out of stock and no alternatives are available right now."),
+                    "agent_used": "order_agent"}
+
+    if not inv:
+        inv = await check_stock(drug_name)
     if not inv:
         res = await get_inventory_fuzzy(drug_name, limit=3)
         inv = res[0] if res else None
@@ -1775,8 +1845,8 @@ async def _execute_order_safe(state: MedState, drug_name: str, inv: dict,
             order = await conn.fetchrow(
                 """INSERT INTO orders
                    (user_id, patient_id, inventory_id, drug_name, quantity, unit_price,
-                    placed_by_role, dup_therapy_checked, cde_risk_tier)
-                   VALUES($1,$2,$3,$4,$5,$6,'self',TRUE,$7) RETURNING *""",
+                    placed_by_role, dup_therapy_checked, cde_risk_tier, status, payment_status)
+                         VALUES($1,$2,$3,$4,$5,$6,'self',TRUE,$7,'pending','pending') RETURNING *""",
                 str(user["id"]), patient_id, str(inv["id"]), drug_name, qty,
                 float(locked["price_per_unit"]),
                 cde.get("risk_tier", 1) if cde else 1)
@@ -1843,17 +1913,29 @@ async def _execute_order_safe(state: MedState, drug_name: str, inv: dict,
 
     total = round(float(locked["price_per_unit"]) * qty, 2)
 
+    _payment_data = {
+        "order_id": str(order["id"]),
+        "drug_name": drug_name,
+        "brand_name": inv.get("brand_name", drug_name),
+        "qty": qty,
+        "unit_price": float(locked["price_per_unit"]),
+        "total": total,
+        "inventory_id": str(inv["id"]),
+        "user_id": uid,
+        "unit": inv.get("unit", "tablet"),
+    }
+
     if is_reorder:
-        # Reorder — no reminder prompt, just confirmation
+        # Reorder — still needs payment, but no reminder prompt after
         return {**state,
-                "reply": (f"🎉 *Reorder Placed!*\n\n"
-                          f"💊 *{inv.get('brand_name',drug_name).title()}*\n"
+                "reply": (f"💊 *{inv.get('brand_name',drug_name).title()}*\n"
                           f"📦 {qty} {inv.get('unit','tablet')}s  |  💰 ₹{total}\n\n"
-                          f"Your existing daily intake reminder has been updated with the new stock. "
-                          f"No need to set a new reminder! ✅"
+                          f"Please complete the payment to confirm your reorder."
                           f"{cde_warn_text}"),
                 "agent_used": "order_agent",
-                "order_record": dict(order)}
+                "order_record": dict(order),
+                "payment_data": _payment_data,
+                "requires_action": "payment_required"}
 
     await r_set(f"pending_order:{phone}",
                 {"order_id": str(order["id"]), "drug": drug_name, "qty": qty,
@@ -1861,17 +1943,15 @@ async def _execute_order_safe(state: MedState, drug_name: str, inv: dict,
                  "freq_key": freq_key}, ttl=1800)
 
     return {**state,
-            "reply": (f"🎉 *Order Placed!*\n\n"
-                      f"💊 *{inv.get('brand_name',drug_name).title()}*\n"
+            "reply": (f"💊 *{inv.get('brand_name',drug_name).title()}*\n"
                       f"📦 {qty} {inv.get('unit','tablet')}s  |  💰 ₹{total}\n"
                       f"🍽️ Take: *{meal_inst.replace('_',' ')}*"
                       f"{cde_warn_text}\n\n"
-                      f"⏰ *Set dose reminders?*\n"
-                      f"Suggested times: {', '.join(times)}\n"
-                      f"Reply *yes* to use these, or send your preferred times _(e.g. '9am 9pm')_."),
+                      f"Please complete the payment to confirm your order."),
             "agent_used": "order_agent",
             "order_record": dict(order),
-            "requires_action": "reminder_setup"}
+            "payment_data": _payment_data,
+            "requires_action": "payment_required"}
 
 
 # ── Node 10: Reminder Agent ───────────────────────────────────

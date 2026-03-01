@@ -45,6 +45,29 @@ export interface OrderItem {
     category: string;
 }
 
+export interface PaymentData {
+    order_id: string;
+    drug_name: string;
+    brand_name: string;
+    qty: number;
+    unit_price: number;
+    total: number;
+    inventory_id: string;
+    user_id: string;
+    unit: string;
+}
+
+export interface InitiatePaymentResponse {
+    order_id: string;
+    razorpay_order_id: string;
+    amount: number;
+    currency: string;
+    key_id: string;
+    user_name: string;
+    user_email: string;
+    user_phone: string;
+}
+
 export interface ChatResponse {
     reply: string;
     session_id: string;
@@ -178,6 +201,7 @@ export interface Order {
     quantity: number;
     total_price: number;
     status: string;
+    payment_status?: string;
     ordered_at: string;
     unit_price?: number;
 }
@@ -283,6 +307,12 @@ export interface PrescriptionDrug {
     duration_days?: number | null;
     instructions?: string | null;
     meal_relation?: string | null;
+    form?: string | null;
+    stock_status?: string | null;
+    stock_qty_available?: number | null;
+    course_start_date?: string | null;
+    course_end_date?: string | null;
+    alternative_drug?: string | null;
 }
 
 export interface PrescriptionObservation {
@@ -303,6 +333,17 @@ export interface PrescriptionDetail {
     error_message?: string | null;
     processed_at?: string | null;
     created_at: string;
+    image_url?: string | null;
+    hospital_name?: string | null;
+    doctor_name?: string | null;
+    patient_name_ocr?: string | null;
+    patient_age_ocr?: string | null;
+    patient_gender_ocr?: string | null;
+    patient_weight_ocr?: string | null;
+    patient_height_ocr?: string | null;
+    prescription_date?: string | null;
+    name_match_score?: number | null;
+    name_match_warning?: string | null;
     drugs: PrescriptionDrug[];
     observations: PrescriptionObservation[];
 }
@@ -311,4 +352,73 @@ export interface UserPrescriptionsResponse {
     user_id: string;
     count: number;
     prescriptions: PrescriptionSummary[];
+}
+
+// ─── Orders & Payment ──────────────────────────────────────
+
+export interface CreateOrderItem {
+    drug_name: string;
+    quantity: number;
+    unit_price: number;
+    inventory_id?: string | null;
+}
+
+export interface CreateOrderRequest {
+    user_id: string;
+    items: CreateOrderItem[];
+    prescription_id?: string | null;
+    delivery_address?: string | null;
+    notes?: string | null;
+}
+
+export interface RazorpayOrderResponse {
+    order_id: string;
+    razorpay_order_id: string;
+    amount: number;
+    currency: string;
+    key_id: string;
+    user_name: string;
+    user_email: string;
+    user_phone: string;
+    items: Array<{
+        order_id: string;
+        order_number: string;
+        drug_name: string;
+        quantity: number;
+        unit_price: number;
+        subtotal: number;
+    }>;
+}
+
+export interface VerifyPaymentResponse {
+    success: boolean;
+    order_id: string;
+    order_number: string;
+    payment_id: string;
+    total_amount: number;
+    items_count: number;
+    message: string;
+}
+
+export interface OrderDetails {
+    razorpay_order_id: string;
+    order_number: string | null;
+    payment_id: string | null;
+    payment_status: string | null;
+    status: string | null;
+    total_amount: number;
+    user_name: string | null;
+    user_email: string | null;
+    user_phone: string | null;
+    email_sent: boolean;
+    sms_sent: boolean;
+    items: Array<{
+        id: string;
+        order_number: string;
+        drug_name: string;
+        quantity: number;
+        unit_price: number;
+        total_price: number;
+        ordered_at: string;
+    }>;
 }

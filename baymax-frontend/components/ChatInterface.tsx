@@ -1,12 +1,13 @@
 ﻿"use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Bot, User, Loader2, Info, Mic, Square, Volume2, VolumeX, ShoppingCart, Package, Minus, Plus, CheckCircle, ExternalLink } from "lucide-react";
+import { Send, Bot, User, Loader2, Info, Mic, Square, Volume2, VolumeX, ShoppingCart, Package, Minus, Plus, CheckCircle, ExternalLink, CreditCard } from "lucide-react";
 import { dataService } from "@/lib/api";
 import { useToast } from "@/hooks/useToast";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { OrderItem } from "@/types/api";
+import Script from "next/script";
+import type { OrderItem, PaymentData } from "@/types/api";
 
 type Message = {
     id: string;
@@ -19,6 +20,7 @@ type Message = {
         agent_used?: string;
         requires_action?: string;
         order_items?: OrderItem[];
+        payment_data?: PaymentData;
         safety_flags?: string[];
         sources?: string[];
         web_search_used?: boolean;
@@ -98,23 +100,44 @@ function SpeakerButton({ text, msgId, onAudio }: { text: string; msgId: string; 
 function OrderCard({
     items,
     requiresAction,
+    paymentData,
     onSendMessage,
+    onPaymentSuccess,
 }: {
     items: OrderItem[];
     requiresAction?: string;
+    paymentData?: PaymentData;
     onSendMessage: (msg: string) => void;
+    onPaymentSuccess: (details: { drug_name: string; qty: number; total: number; payment_id: string }) => void;
 }) {
+    const { toast } = useToast();
+    const displayItems: OrderItem[] = (items && items.length > 0)
+        ? items
+        : (paymentData
+            ? [{
+                drug_name: paymentData.drug_name,
+                brand_name: paymentData.brand_name,
+                strength: "",
+                unit: paymentData.unit || "unit",
+                stock_qty: paymentData.qty,
+                price_per_unit: paymentData.unit_price,
+                is_otc: true,
+                category: "",
+            }]
+            : []);
     const [quantities, setQuantities] = useState<Record<string, number>>(() => {
         const init: Record<string, number> = {};
-        items.forEach(item => { init[item.drug_name] = 10; });
+        displayItems.forEach(item => { init[item.drug_name] = 10; });
         return init;
     });
     const [ordered, setOrdered] = useState(false);
+    const [paying, setPaying] = useState(false);
+    const [paid, setPaid] = useState(false);
 
     const updateQty = (drugName: string, delta: number) => {
         setQuantities(prev => ({
             ...prev,
-            [drugName]: Math.max(1, Math.min((prev[drugName] || 10) + delta, items.find(i => i.drug_name === drugName)?.stock_qty || 999))
+            [drugName]: Math.max(1, Math.min((prev[drugName] || 10) + delta, displayItems.find(i => i.drug_name === drugName)?.stock_qty || 999))
         }));
     };
 
@@ -124,11 +147,71 @@ function OrderCard({
         setOrdered(true);
     };
 
-    if (items.length === 0) return null;
+    const handlePayNow = async () => {
+        if (!paymentData) return;
+        setPaying(true);
+        try {
+            const rzData = await dataService.initiatePayment(paymentData.order_id);
+            const options: RazorpayOptions = {
+                key: rzData.key_id,
+                amount: Math.round(rzData.amount * 100),
+                currency: rzData.currency || "INR",
+                name: "BayMax Pharmacy",
+                description: `${paymentData.drug_name} ×${paymentData.qty}`,
+                order_id: rzData.razorpay_order_id,
+                prefill: {
+                    name: rzData.user_name,
+                    email: rzData.user_email,
+                    contact: rzData.user_phone,
+                },
+                theme: { color: "#059669" },
+                handler: async (response) => {
+                    try {
+                        await dataService.verifyPayment({
+                            razorpay_order_id: response.razorpay_order_id,
+                            razorpay_payment_id: response.razorpay_payment_id,
+                            razorpay_signature: response.razorpay_signature,
+                        });
+                        setPaid(true);
+                        setPaying(false);
+                        onPaymentSuccess({
+                            drug_name: paymentData.brand_name || paymentData.drug_name,
+                            qty: paymentData.qty,
+                            total: paymentData.total,
+                            payment_id: response.razorpay_payment_id,
+                        });
+                    } catch {
+                        toast("Payment verified but order update failed. Contact support.", "error");
+                        setPaying(false);
+                    }
+                },
+                modal: {
+                    ondismiss: () => {
+                        setPaying(false);
+                        toast("Payment cancelled", "error");
+                    },
+                },
+            };
+
+            if (typeof window !== "undefined" && window.Razorpay) {
+                const rzp = new window.Razorpay(options);
+                rzp.open();
+            } else {
+                toast("Payment gateway not loaded. Please refresh and try again.", "error");
+                setPaying(false);
+            }
+        } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : "Failed to initiate payment";
+            toast(msg, "error");
+            setPaying(false);
+        }
+    };
+
+    if (displayItems.length === 0) return null;
 
     return (
         <div className="mt-3 space-y-3">
-            {items.map((item) => {
+            {displayItems.map((item) => {
                 const qty = quantities[item.drug_name] || 10;
                 const total = (qty * item.price_per_unit).toFixed(2);
                 return (
@@ -148,16 +231,18 @@ function OrderCard({
                                     )}
                                 </div>
                             </div>
-                            <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] font-black uppercase tracking-widest rounded-md">
-                                In Stock
-                            </span>
+                            {requiresAction === "order_quantity" && (
+                                <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] font-black uppercase tracking-widest rounded-md">
+                                    In Stock
+                                </span>
+                            )}
                         </div>
 
                         {/* Details Grid */}
                         <div className="px-4 py-3 grid grid-cols-3 gap-3 text-center">
                             <div>
-                                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Available</p>
-                                <p className="text-sm font-bold text-slate-700 mt-0.5">{item.stock_qty} {item.unit}s</p>
+                                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{requiresAction === "order_quantity" ? "Available" : "Quantity"}</p>
+                                <p className="text-sm font-bold text-slate-700 mt-0.5">{requiresAction === "order_quantity" ? `${item.stock_qty} ${item.unit}s` : `${paymentData?.qty || item.stock_qty} ${item.unit}s`}</p>
                             </div>
                             <div>
                                 <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Price</p>
@@ -166,9 +251,11 @@ function OrderCard({
                             <div>
                                 <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Type</p>
                                 <p className="text-sm font-bold mt-0.5">
-                                    {item.is_otc
-                                        ? <span className="text-emerald-600">OTC âœ“</span>
-                                        : <span className="text-amber-600">Rx Needed</span>
+                                    {requiresAction === "payment_required"
+                                        ? <span className="text-emerald-600">Payment Pending</span>
+                                        : item.is_otc
+                                            ? <span className="text-emerald-600">OTC âœ“</span>
+                                            : <span className="text-amber-600">Rx Needed</span>
                                     }
                                 </p>
                             </div>
@@ -221,7 +308,27 @@ function OrderCard({
                                 <CheckCircle size={14} /> Order request sent â€” check below for confirmation.
                             </div>
                         )}
-                    </div>
+                        {/* Payment Required — Pay Now button */}
+                        {requiresAction === "payment_required" && paymentData && !paid && (
+                            <div className="px-4 py-3 border-t border-slate-100 flex items-center justify-between gap-3">
+                                <div className="text-sm font-bold text-slate-700">
+                                    {paymentData.qty} {paymentData.unit || "unit"}s &times; &#8377;{paymentData.unit_price} = <span className="text-emerald-700">&#8377;{paymentData.total.toFixed(2)}</span>
+                                </div>
+                                <button
+                                    onClick={handlePayNow}
+                                    disabled={paying}
+                                    className="px-5 py-2.5 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-700 transition-all active:scale-[0.97] flex items-center gap-2 shadow-sm disabled:opacity-60"
+                                >
+                                    {paying ? <><Loader2 size={12} className="animate-spin" /> Processing...</> : <><CreditCard size={12} /> Pay &#8377;{paymentData.total.toFixed(0)}</>}
+                                </button>
+                            </div>
+                        )}
+
+                        {paid && (
+                            <div className="px-4 py-3 border-t border-emerald-100 bg-emerald-50/50 flex items-center gap-2 text-xs font-bold text-emerald-700">
+                                <CheckCircle size={14} /> Payment successful! Order confirmed.
+                            </div>
+                        )}                    </div>
                 );
             })}
         </div>
@@ -252,6 +359,16 @@ export default function ChatInterface({ phone }: { phone: string }) {
         ));
     };
 
+    // Helper: add payment confirmation message to chat
+    const addPaymentConfirmation = (details: { drug_name: string; qty: number; total: number; payment_id: string }) => {
+        const confirmMsg: Message = {
+            id: `payment-${Date.now()}`,
+            role: "assistant",
+            content: `✅ **Order Confirmed!**\n\n💊 **${details.drug_name}** × ${details.qty}\n💰 Amount Paid: ₹${details.total.toFixed(2)}\n🧾 Payment ID: \`${details.payment_id}\`\n\nYour order has been placed successfully! You'll receive a confirmation on WhatsApp shortly.`,
+        };
+        setMessages(prev => [...prev, confirmMsg]);
+    };
+
     // Helper: programmatically send a message (used by OrderCard)
     const sendMessage = (text: string) => {
         setInput(text);
@@ -279,7 +396,12 @@ export default function ChatInterface({ phone }: { phone: string }) {
 
             const res = await fetch(`${baseURL}/stream`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-Phone": phone,
+                    "X-Session-Id": `web_${phone}`,
+                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                },
                 body: JSON.stringify({ phone, message: messageText, channel: "web" }),
             });
 
@@ -319,6 +441,7 @@ export default function ChatInterface({ phone }: { phone: string }) {
                                     agent_used: payload.agent_used,
                                     requires_action: payload.requires_action,
                                     order_items: payload.order_items,
+                                    payment_data: payload.payment_data || undefined,
                                     emergency: payload.emergency,
                                     safety_flags: payload.safety_flags,
                                     sources: finalSources,
@@ -418,11 +541,13 @@ export default function ChatInterface({ phone }: { phone: string }) {
                             </div>
 
                             {/* Order Card */}
-                            {msg.metadata?.order_items && msg.metadata.order_items.length > 0 && (
+                            {(msg.metadata?.payment_data || (msg.metadata?.order_items && msg.metadata.order_items.length > 0)) && (
                                 <OrderCard
-                                    items={msg.metadata.order_items}
+                                    items={msg.metadata.order_items || []}
                                     requiresAction={msg.metadata.requires_action}
+                                    paymentData={msg.metadata.payment_data}
                                     onSendMessage={sendMessage}
+                                    onPaymentSuccess={addPaymentConfirmation}
                                 />
                             )}
 
@@ -463,6 +588,9 @@ export default function ChatInterface({ phone }: { phone: string }) {
                 )}
                 <div ref={bottomRef} className="h-4" />
             </div>
+
+            {/* Razorpay SDK */}
+            <Script src="https://checkout.razorpay.com/v1/checkout.js" strategy="lazyOnload" />
 
             {/* Input area */}
             <div className="shrink-0 p-3 bg-white border-t border-slate-100">

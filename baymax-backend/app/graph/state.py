@@ -49,4 +49,6 @@ class MedState(TypedDict):
     dfe_context:      Optional[dict]         # Clinical context used by DFE
     web_search_used:  bool
     web_search_source:Optional[str]          # Domain that was used
+    force_web_search: bool
+    web_search_query: Optional[str]
     behavioral_profile: Optional[dict]       # short_replies, ignores, anxiety
